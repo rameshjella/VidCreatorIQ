@@ -1,0 +1,530 @@
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import FileResponse
+import requests
+from pathlib import Path
+from shutil import which
+from sqlalchemy.orm import Session
+
+from app import crud
+from app.config import settings
+from app.database import get_db
+from app.models import Job, Scene
+from app.queue import enqueue_pipeline
+from app.schemas import (
+    JobEventOut,
+    JobOut,
+    MovieRunResponse,
+    ProjectCreate,
+    ProjectOut,
+    RegenerateSceneRequest,
+    ResumeJobRequest,
+    RunProjectRequest,
+    SceneOut,
+    SceneTimelineUpdateRequest,
+)
+from app.services.pipeline import MoviePipeline
+from app.services.comfyui_workflow_client import ComfyUIWorkflowClient
+
+router = APIRouter()
+
+
+@router.get("/health")
+def health() -> dict:
+    return {"status": "ok"}
+
+
+def _resolve_binary(command: str) -> str | None:
+    command = (command or "").strip()
+    if not command:
+        return None
+    if Path(command).exists():
+        return str(Path(command).resolve())
+    return which(command)
+
+
+@router.get("/health/dependencies")
+def health_dependencies() -> dict:
+    ffmpeg_resolved = _resolve_binary(settings.ffmpeg_bin)
+    checkpoint_health = _comfyui_checkpoint_health()
+
+    comfy_ready = False
+    comfy_detail = "COMFYUI_URL is not configured"
+    if settings.comfyui_url.strip():
+        try:
+            response = requests.get(f"{settings.comfyui_url.rstrip('/')}/system_stats", timeout=3)
+            comfy_ready = response.ok
+            comfy_detail = "reachable" if response.ok else f"HTTP {response.status_code}"
+        except requests.RequestException as exc:
+            comfy_detail = str(exc)
+
+    piper_bin_resolved = _resolve_binary(settings.piper_executable)
+    piper_model_exists = bool(settings.piper_model_path.strip()) and Path(settings.piper_model_path).exists()
+    piper_ready = bool(piper_bin_resolved and piper_model_exists)
+    if not settings.piper_executable.strip() and not settings.piper_model_path.strip():
+        piper_detail = "not configured (pyttsx3 fallback will be used)"
+    else:
+        piper_detail = (
+            "ready"
+            if piper_ready
+            else "binary or model path not valid"
+        )
+
+    dependencies = {
+        "ffmpeg": {
+            "ready": bool(ffmpeg_resolved),
+            "configured": settings.ffmpeg_bin,
+            "resolved_path": ffmpeg_resolved or "",
+            "detail": "ready" if ffmpeg_resolved else "not found in PATH or configured location",
+        },
+        "comfyui": {
+            "ready": comfy_ready,
+            "configured_url": settings.comfyui_url,
+            "detail": comfy_detail,
+            "checkpoint_count": checkpoint_health.get("checkpoint_count", 0),
+            "has_checkpoints": checkpoint_health.get("has_checkpoints", False),
+            "checkpoint_detail": checkpoint_health.get("detail", ""),
+        },
+        "piper": {
+            "ready": piper_ready,
+            "configured_executable": settings.piper_executable,
+            "configured_model_path": settings.piper_model_path,
+            "resolved_executable": piper_bin_resolved or "",
+            "model_exists": piper_model_exists,
+            "detail": piper_detail,
+        },
+    }
+
+    return {
+        "status": "ok",
+        "dependencies": dependencies,
+        "ready_for_generation": dependencies["ffmpeg"]["ready"],
+        "ready_for_cinematic": (
+            dependencies["ffmpeg"]["ready"]
+            and dependencies["comfyui"]["ready"]
+            and dependencies["comfyui"]["has_checkpoints"]
+        ),
+    }
+
+
+def _is_comfyui_ready() -> bool:
+    comfy_url = settings.comfyui_url.strip()
+    if not comfy_url:
+        return False
+    try:
+        response = requests.get(f"{comfy_url.rstrip('/')}/system_stats", timeout=3)
+        return response.ok
+    except requests.RequestException:
+        return False
+
+
+def _has_comfyui_checkpoints() -> bool:
+    return bool(_comfyui_checkpoint_health().get("has_checkpoints", False))
+
+
+def _comfyui_checkpoint_health(sample_limit: int = 8) -> dict:
+    comfy_url = settings.comfyui_url.strip()
+    endpoint = f"{comfy_url.rstrip('/')}/object_info/CheckpointLoaderSimple" if comfy_url else ""
+    payload = {
+        "configured": bool(comfy_url),
+        "configured_url": comfy_url,
+        "endpoint": endpoint,
+        "reachable": False,
+        "schema_recognized": False,
+        "checkpoint_count": 0,
+        "sample_checkpoint_names": [],
+        "has_checkpoints": False,
+        "detail": "COMFYUI_URL is not configured",
+    }
+    if not comfy_url:
+        return payload
+
+    try:
+        response = requests.get(endpoint, timeout=6)
+        response.raise_for_status()
+        payload["reachable"] = True
+    except requests.RequestException as exc:
+        payload["detail"] = f"Checkpoint endpoint not reachable: {exc}"
+        return payload
+
+    try:
+        data = response.json()
+    except ValueError:
+        preview = (response.text or "").strip()[:220]
+        payload["detail"] = f"Checkpoint endpoint returned non-JSON: {preview}"
+        return payload
+
+    names, schema_recognized = ComfyUIWorkflowClient._extract_checkpoint_names(data)
+    payload["schema_recognized"] = schema_recognized
+    payload["checkpoint_count"] = len(names)
+    payload["sample_checkpoint_names"] = names[:sample_limit]
+    payload["has_checkpoints"] = len(names) > 0
+    if not schema_recognized:
+        payload["detail"] = "Unable to parse ckpt_name schema from CheckpointLoaderSimple"
+    elif names:
+        payload["detail"] = f"Found {len(names)} checkpoints"
+    else:
+        payload["detail"] = "ComfyUI reports zero checkpoints"
+    return payload
+
+
+@router.get("/health/comfyui-checkpoints")
+def health_comfyui_checkpoints() -> dict:
+    return {
+        "status": "ok",
+        "comfyui_checkpoints": _comfyui_checkpoint_health(),
+    }
+
+
+@router.get("/health/dependency-doctor")
+def health_dependency_doctor() -> dict:
+    findings: list[dict] = []
+    checkpoint_health = _comfyui_checkpoint_health()
+
+    ffmpeg_configured = settings.ffmpeg_bin.strip()
+    ffmpeg_resolved = _resolve_binary(ffmpeg_configured)
+    if not ffmpeg_resolved:
+        findings.append(
+            {
+                "dependency": "ffmpeg",
+                "severity": "error",
+                "issue": "FFmpeg binary is not resolvable",
+                "missing": {
+                    "configured_ffmpeg_bin": ffmpeg_configured,
+                    "resolved_path": "",
+                },
+                "suggested_fixes": [
+                    "Install FFmpeg and ensure it is available in PATH.",
+                    "Set FFMPEG_BIN in .env to the full path of ffmpeg executable.",
+                    "Example (Windows): FFMPEG_BIN=C:\\ffmpeg\\bin\\ffmpeg.exe",
+                ],
+            }
+        )
+
+    comfy_url = settings.comfyui_url.strip()
+    if not comfy_url:
+        findings.append(
+            {
+                "dependency": "comfyui",
+                "severity": "warning",
+                "issue": "COMFYUI_URL is not configured",
+                "missing": {
+                    "comfyui_url": "",
+                },
+                "suggested_fixes": [
+                    "Start ComfyUI locally and set COMFYUI_URL in .env.",
+                    "Example: COMFYUI_URL=http://127.0.0.1:8188",
+                ],
+            }
+        )
+    else:
+        try:
+            stats_resp = requests.get(f"{comfy_url.rstrip('/')}/system_stats", timeout=3)
+            if not stats_resp.ok:
+                findings.append(
+                    {
+                        "dependency": "comfyui",
+                        "severity": "warning",
+                        "issue": "ComfyUI endpoint is configured but not healthy",
+                        "missing": {
+                            "comfyui_url": comfy_url,
+                            "http_status": stats_resp.status_code,
+                        },
+                        "suggested_fixes": [
+                            "Ensure ComfyUI server is running and reachable.",
+                            "Verify COMFYUI_URL points to the correct host and port.",
+                        ],
+                    }
+                )
+        except requests.RequestException as exc:
+            findings.append(
+                {
+                    "dependency": "comfyui",
+                    "severity": "warning",
+                    "issue": "ComfyUI connection failed",
+                    "missing": {
+                        "comfyui_url": comfy_url,
+                        "error": str(exc),
+                    },
+                    "suggested_fixes": [
+                        "Start ComfyUI and verify the URL manually in a browser.",
+                        "Check firewall/network settings if ComfyUI is remote.",
+                    ],
+                }
+            )
+
+    if checkpoint_health.get("configured") and checkpoint_health.get("reachable"):
+        if not checkpoint_health.get("schema_recognized"):
+            findings.append(
+                {
+                    "dependency": "comfyui",
+                    "severity": "warning",
+                    "issue": "ComfyUI checkpoint schema is not recognized",
+                    "missing": {
+                        "endpoint": checkpoint_health.get("endpoint", ""),
+                        "detail": checkpoint_health.get("detail", ""),
+                    },
+                    "suggested_fixes": [
+                        "Update ComfyUI to a version with standard CheckpointLoaderSimple schema.",
+                        "Verify /object_info/CheckpointLoaderSimple returns ckpt_name options.",
+                    ],
+                }
+            )
+        elif not checkpoint_health.get("has_checkpoints"):
+            findings.append(
+                {
+                    "dependency": "comfyui",
+                    "severity": "error",
+                    "issue": "ComfyUI reports zero checkpoints in CheckpointLoaderSimple",
+                    "missing": {
+                        "endpoint": checkpoint_health.get("endpoint", ""),
+                        "checkpoint_count": checkpoint_health.get("checkpoint_count", 0),
+                    },
+                    "suggested_fixes": [
+                        "Add model files to ComfyUI checkpoints directories.",
+                        "Configure model search paths via COMFYUI_MODEL_PATHS and/or --extra-model-paths-config.",
+                    ],
+                }
+            )
+
+    workflow_checks = [
+        ("comfyui_sd_workflow", settings.comfyui_sd_workflow),
+        ("comfyui_animatediff_workflow", settings.comfyui_animatediff_workflow),
+    ]
+    for key, workflow_path in workflow_checks:
+        if not Path(workflow_path).exists():
+            findings.append(
+                {
+                    "dependency": "comfyui",
+                    "severity": "warning",
+                    "issue": f"Workflow file is missing: {key}",
+                    "missing": {
+                        "setting": key,
+                        "path": workflow_path,
+                    },
+                    "suggested_fixes": [
+                        f"Set {key.upper()} to an existing workflow JSON path.",
+                        "Keep default app/workflows JSON files or export workflows from ComfyUI.",
+                    ],
+                }
+            )
+
+    piper_exe = settings.piper_executable.strip()
+    piper_model = settings.piper_model_path.strip()
+    piper_exe_resolved = _resolve_binary(piper_exe) if piper_exe else None
+    piper_model_exists = Path(piper_model).exists() if piper_model else False
+    if not piper_exe or not piper_model:
+        findings.append(
+            {
+                "dependency": "piper",
+                "severity": "info",
+                "issue": "Piper is not configured (fallback TTS will be used)",
+                "missing": {
+                    "piper_executable": piper_exe,
+                    "piper_model_path": piper_model,
+                },
+                "suggested_fixes": [
+                    "Set PIPER_EXECUTABLE and PIPER_MODEL_PATH in .env for neural voice generation.",
+                    "If fallback is acceptable, this can be ignored.",
+                ],
+            }
+        )
+    elif not piper_exe_resolved or not piper_model_exists:
+        findings.append(
+            {
+                "dependency": "piper",
+                "severity": "warning",
+                "issue": "Piper path configuration is invalid",
+                "missing": {
+                    "piper_executable": piper_exe,
+                    "resolved_executable": piper_exe_resolved or "",
+                    "piper_model_path": piper_model,
+                    "model_exists": piper_model_exists,
+                },
+                "suggested_fixes": [
+                    "Set PIPER_EXECUTABLE to a valid piper binary path.",
+                    "Set PIPER_MODEL_PATH to an existing .onnx voice model.",
+                ],
+            }
+        )
+
+    has_blockers = any(item["severity"] == "error" for item in findings)
+    return {
+        "status": "ok",
+        "summary": {
+            "blocking_issues": has_blockers,
+            "issue_count": len(findings),
+        },
+        "findings": findings,
+        "comfyui_checkpoints": checkpoint_health,
+    }
+
+
+@router.post("/projects", response_model=ProjectOut)
+def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
+    project = crud.create_project(db, payload.title, payload.script_text, payload.language)
+    return project
+
+
+@router.get("/projects", response_model=list[ProjectOut])
+def list_projects(db: Session = Depends(get_db)):
+    return crud.list_projects(db)
+
+
+@router.get("/projects/{project_id}", response_model=ProjectOut)
+def get_project(project_id: int, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
+def _run_pipeline(
+    project_id: int,
+    job_id: int,
+    resume_from_scene_index: int | None = None,
+    visual_mode: str = "basic",
+):
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        project = crud.get_project(db, project_id)
+        job = crud.get_job(db, job_id)
+        if not project or not job:
+            return
+        pipeline = MoviePipeline(db)
+        pipeline.run(
+            project,
+            job,
+            resume=True,
+            resume_from_scene_index=resume_from_scene_index,
+            visual_mode=visual_mode,
+        )
+    except Exception as exc:
+        job = crud.get_job(db, job_id)
+        if job:
+            MoviePipeline(db).mark_failure(job, exc)
+    finally:
+        db.close()
+
+
+@router.post("/projects/{project_id}/run", response_model=MovieRunResponse)
+def run_project(
+    project_id: int,
+    payload: RunProjectRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    visual_mode = (payload.visual_mode or "basic").strip().lower()
+    if visual_mode not in {"basic", "cinematic"}:
+        raise HTTPException(status_code=400, detail="visual_mode must be 'basic' or 'cinematic'")
+    if visual_mode == "cinematic" and not _is_comfyui_ready():
+        raise HTTPException(
+            status_code=400,
+            detail="Cinematic mode requires ComfyUI readiness. Configure COMFYUI_URL and ensure the server is running.",
+        )
+    if visual_mode == "cinematic" and not _has_comfyui_checkpoints():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cinematic mode requires at least one ComfyUI checkpoint model. "
+                "Add a .safetensors/.ckpt file to checkpoints and verify /health/comfyui-checkpoints."
+            ),
+        )
+
+    job = crud.create_job(db, project_id)
+    queue_job_id = enqueue_pipeline(project_id, job.id, resume_from_scene_index=None, visual_mode=visual_mode)
+    if queue_job_id:
+        crud.update_job_queue_id(db, job, queue_job_id)
+    else:
+        background_tasks.add_task(_run_pipeline, project_id, job.id, None, visual_mode)
+    return {"job_id": job.id, "project_id": project_id, "status": "queued"}
+
+
+@router.get("/jobs/{job_id}", response_model=JobOut)
+def get_job(job_id: int, db: Session = Depends(get_db)):
+    job = crud.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@router.get("/jobs/{job_id}/events", response_model=list[JobEventOut])
+def get_job_events(job_id: int, db: Session = Depends(get_db)):
+    job = crud.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return crud.list_job_events(db, job_id)
+
+
+@router.post("/jobs/{job_id}/resume", response_model=MovieRunResponse)
+def resume_job(
+    job_id: int,
+    payload: ResumeJobRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    job = crud.get_job(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    project = crud.get_project(db, job.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    queue_job_id = enqueue_pipeline(
+        project.id,
+        job.id,
+        resume_from_scene_index=payload.failed_scene_index,
+        visual_mode="basic",
+    )
+    if queue_job_id:
+        crud.update_job_queue_id(db, job, queue_job_id)
+    else:
+        background_tasks.add_task(_run_pipeline, project.id, job.id, payload.failed_scene_index)
+    return {"job_id": job.id, "project_id": project.id, "status": "queued"}
+
+
+@router.patch("/projects/{project_id}/scenes", response_model=list[SceneOut])
+def update_scene_timeline(project_id: int, payload: SceneTimelineUpdateRequest, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    updates = [(item.scene_id, item.scene_index, item.duration_seconds) for item in payload.scenes]
+    return crud.update_scene_timeline(db, project_id, updates)
+
+
+@router.post("/projects/{project_id}/scenes/regenerate", response_model=SceneOut)
+def regenerate_scene(project_id: int, payload: RegenerateSceneRequest, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    scene = db.query(Scene).filter(Scene.id == payload.scene_id, Scene.project_id == project_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    updated = MoviePipeline(db).regenerate_scene(project, scene)
+    return updated
+
+
+@router.get("/projects/{project_id}/download")
+def download_movie(project_id: int, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    latest_job = (
+        db.query(Job)
+        .filter(Job.project_id == project_id, Job.status == "completed")
+        .order_by(Job.updated_at.desc())
+        .first()
+    )
+    if not latest_job or not latest_job.output_video_path:
+        raise HTTPException(status_code=404, detail="Final video not found")
+
+    return FileResponse(latest_job.output_video_path, media_type="video/mp4", filename="ai_movie.mp4")
+
+

@@ -1,0 +1,9 @@
+# Project-local ComfyUI model path mapping.
+# Keep checkpoint files under ./comfyui_models/checkpoints/ to make launcher/config portable.
+vidcreatoriq:
+  base_path: C:/SourceCode/VidCreatorIQ/comfyui_models
+  checkpoints: checkpoints
+
+comfyui_install:
+  base_path: C:/SourceCode/ComfyUI/models
+  checkpoints: checkpoints

@@ -1,0 +1,93 @@
+{
+  "1": {
+    "inputs": {
+      "text": "{{prompt}}",
+      "clip": [
+        "11",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode"
+  },
+  "2": {
+    "inputs": {
+      "text": "low quality, watermark, blur",
+      "clip": [
+        "11",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode"
+  },
+  "3": {
+    "inputs": {
+      "width": 768,
+      "height": 432,
+      "length": 16,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage"
+  },
+  "4": {
+    "inputs": {
+      "seed": 1,
+      "steps": 22,
+      "cfg": 7,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": [
+        "11",
+        0
+      ],
+      "positive": [
+        "1",
+        0
+      ],
+      "negative": [
+        "2",
+        0
+      ],
+      "latent_image": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "KSampler"
+  },
+  "5": {
+    "inputs": {
+      "samples": [
+        "4",
+        0
+      ],
+      "vae": [
+        "11",
+        2
+      ]
+    },
+    "class_type": "VAEDecode"
+  },
+  "6": {
+    "inputs": {
+      "frame_rate": 8,
+      "loop_count": 0,
+      "pingpong": false,
+      "save_output": true,
+      "format": "video/h264-mp4",
+      "filename_prefix": "ai_movie/scene_{{scene_index}}",
+      "images": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine"
+  },
+  "11": {
+    "inputs": {
+      "ckpt_name": "{{checkpoint}}"
+    },
+    "class_type": "CheckpointLoaderSimple"
+  }
+}
+
