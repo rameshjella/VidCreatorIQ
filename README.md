@@ -4,7 +4,7 @@ AI Movie Maker converts a script into a narrated MP4 with one click.
 
 ## What This MVP Delivers
 
-- Streamlit UX for script upload/paste, storyboard preview, regenerate scene, and download
+- React + Vite web UX for script upload/paste, dependency checks, timeline updates, and job monitoring
 - FastAPI backend with local SQLite project history
 - LangGraph multi-agent pipeline:
   - Director Agent
@@ -64,7 +64,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ## Run Frontend
 
 ```bash
-streamlit run streamlit_app.py --server.port 8501
+cd ui
+npm install
+npm run dev -- --host 127.0.0.1 --port 8501
 ```
 
 ## Single-Command Launcher (Windows/Linux/macOS)
@@ -78,8 +80,11 @@ python run_ai_movie_maker.py --install
 Useful variants:
 
 ```bash
-# start without install
+# start without install (React UI default)
 python run_ai_movie_maker.py
+
+# keep legacy Streamlit UI
+python run_ai_movie_maker.py --ui streamlit
 
 # dev mode with API auto-reload
 python run_ai_movie_maker.py --api-reload
@@ -102,6 +107,10 @@ Logs are written to `logs/`:
 - `logs/api.log`
 - `logs/ui.log`
 - `logs/worker.log` (when `--with-worker` is used)
+
+UI stack:
+- Default: React + Vite (`ui/`)
+- Legacy fallback: Streamlit (`streamlit_app.py`) via `--ui streamlit`
 
 ## True ComfyUI Integration
 
@@ -175,7 +184,7 @@ python scripts/derive_comfy_ids.py /path/to/sd_workflow.json /path/to/animatedif
 - Reorder scenes and edit clip durations in the Streamlit timeline editor, then click **Save Timeline**.
 
 Open:
-- Streamlit: `http://localhost:8501`
+- UI: `http://localhost:8501`
 - FastAPI docs: `http://localhost:8000/docs`
 
 ## One-Click Flow

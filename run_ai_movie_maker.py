@@ -374,6 +374,20 @@ def _install_requirements(workspace: Path, combined_log: TextIO) -> None:
         raise RuntimeError("Dependency installation failed")
 
 
+def _install_ui_dependencies(ui_dir: Path, combined_log: TextIO) -> None:
+    cmd = [_npm_command(), "install"]
+    _log_line("launcher", f"installing UI dependencies in {ui_dir}", combined_log)
+    result = subprocess.run(cmd, cwd=str(ui_dir), capture_output=True, text=True)
+    if result.stdout:
+        for line in result.stdout.splitlines():
+            _log_line("npm", line, combined_log)
+    if result.stderr:
+        for line in result.stderr.splitlines():
+            _log_line("npm", line, combined_log)
+    if result.returncode != 0:
+        raise RuntimeError("UI dependency installation failed")
+
+
 def _load_dotenv(workspace: Path, env: dict[str, str]) -> None:
     env_path = workspace / ".env"
     if not env_path.exists():
@@ -397,9 +411,13 @@ def _env_int(env: dict[str, str], key: str, default: int) -> int:
         return default
 
 
+def _npm_command() -> str:
+    return "npm.cmd" if os.name == "nt" else "npm"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Single-command launcher for FastAPI backend + Streamlit UI with full logs."
+        description="Single-command launcher for FastAPI backend + React/Streamlit UI with full logs."
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--api-port", type=int, default=8000)
@@ -408,6 +426,12 @@ def main() -> int:
     parser.add_argument("--smoke-test", action="store_true", help="Start services, validate endpoints, then stop.")
     parser.add_argument("--install", action="store_true", help="Run pip install -r requirements.txt before startup.")
     parser.add_argument("--api-reload", action="store_true", help="Enable uvicorn auto-reload.")
+    parser.add_argument(
+        "--ui",
+        choices=["react", "streamlit"],
+        default="react",
+        help="Choose UI runtime. Defaults to react.",
+    )
     parser.add_argument("--with-worker", action="store_true", help="Start RQ worker when Redis is configured.")
     parser.add_argument("--with-comfyui", action="store_true", help="Start ComfyUI automatically when COMFYUI_START_COMMAND is configured.")
     parser.add_argument(
@@ -438,6 +462,8 @@ def main() -> int:
 
         if args.install:
             _install_requirements(workspace, combined_log)
+            if args.ui == "react":
+                _install_ui_dependencies(workspace / "ui", combined_log)
 
         api_port = _pick_free_port(args.host, args.api_port)
         ui_port = _pick_free_port(args.host, args.ui_port)
@@ -461,17 +487,41 @@ def main() -> int:
         if args.api_reload:
             api_cmd.append("--reload")
 
-        ui_cmd = [
-            sys.executable,
-            "-m",
-            "streamlit",
-            "run",
-            "streamlit_app.py",
-            "--server.port",
-            str(ui_port),
-            "--server.address",
-            args.host,
-        ]
+        if args.ui == "streamlit":
+            ui_cmd = [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                "streamlit_app.py",
+                "--server.port",
+                str(ui_port),
+                "--server.address",
+                args.host,
+            ]
+            ui_cwd = workspace
+            ui_health_url = f"http://{args.host}:{ui_port}"
+        else:
+            if not (workspace / "ui" / "package.json").exists():
+                raise RuntimeError("React UI not found at ./ui. Restore the ui folder or run with --ui streamlit.")
+            if not (workspace / "ui" / "node_modules").exists() and not args.install:
+                raise RuntimeError(
+                    "React UI dependencies are missing. Run `python run_ai_movie_maker.py --install` once, "
+                    "or run `npm install` inside ./ui."
+                )
+            ui_cmd = [
+                _npm_command(),
+                "run",
+                "dev",
+                "--",
+                "--host",
+                args.host,
+                "--port",
+                str(ui_port),
+            ]
+            ui_cwd = workspace / "ui"
+            ui_health_url = f"http://{args.host}:{ui_port}"
+            env["VITE_API_BASE_URL"] = env["API_BASE_URL"]
 
         worker_cmd = [
             sys.executable,
@@ -642,12 +692,12 @@ def main() -> int:
                         raise
 
             managed.append(_start_process("api", api_cmd, workspace, env, combined_log, logs_dir))
-            managed.append(_start_process("ui", ui_cmd, workspace, env, combined_log, logs_dir))
+            managed.append(_start_process("ui", ui_cmd, ui_cwd, env, combined_log, logs_dir))
             if args.with_worker and env.get("REDIS_URL"):
                 managed.append(_start_process("worker", worker_cmd, workspace, env, combined_log, logs_dir))
 
             api_url = f"http://{args.host}:{api_port}/health"
-            ui_url = f"http://{args.host}:{ui_port}"
+            ui_url = ui_health_url
             _log_line("launcher", f"waiting for API at {api_url}", combined_log)
             api_ready = _wait_http_ok(api_url, args.startup_timeout)
             _log_line("launcher", f"waiting for UI at {ui_url}", combined_log)
