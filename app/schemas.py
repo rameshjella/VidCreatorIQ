@@ -141,3 +141,17 @@ class MusicGenerationOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MusicWarmupOut(BaseModel):
+    status: str
+    model: str
+    device: str
+    load_time_ms: int
+    ready: bool
+
+
+class MusicWaveformOut(BaseModel):
+    generation_id: int
+    points: int
+    peaks: list[float]
+
+

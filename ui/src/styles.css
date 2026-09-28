@@ -139,6 +139,7 @@ button.exampleChip {
   color: #334155;
   background: #f1f5f9;
   border: 1px solid #cbd5e1;
+  white-space: normal;
 }
 
 .musicResult .resultTitle {
@@ -150,6 +151,26 @@ button.exampleChip {
 .audioPlayer {
   width: 100%;
   margin: 12px 0;
+}
+
+.waveform {
+  width: 100%;
+  height: 52px;
+  margin: 10px 0 2px;
+  border-radius: 8px;
+  border: 1px solid #dbe3ee;
+  background: #f8fafc;
+  padding: 6px;
+}
+
+.waveform svg {
+  width: 100%;
+  height: 100%;
+}
+
+.waveform rect {
+  fill: #2563eb;
+  opacity: 0.9;
 }
 
 .generationDetails {

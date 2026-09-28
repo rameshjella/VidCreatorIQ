@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -20,8 +21,26 @@ def main() -> None:
         "duration_seconds": 4,
     }
     response = client.post("/music/generate", json=payload)
-    print("status", response.status_code)
-    print(response.text[:1500])
+    print("submit_status", response.status_code)
+    created = response.json()
+    generation_id = created.get("id")
+    print("generation_id", generation_id)
+
+    if not generation_id:
+        print(str(created)[:1500])
+        return
+
+    for _ in range(120):
+        poll = client.get(f"/music/generations/{generation_id}")
+        payload_out = poll.json()
+        status = payload_out.get("status")
+        print("poll_status", status)
+        if status in {"completed", "failed"}:
+            print(str(payload_out)[:1500])
+            return
+        time.sleep(1.5)
+
+    print("Timed out waiting for generation completion")
 
 
 if __name__ == "__main__":

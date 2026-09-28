@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app import crud
 from app.config import settings
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.schemas import (
     MusicGenerateRequest,
     MusicGenerationOut,
+    MusicWarmupOut,
     MusicVariationRequest,
+    MusicWaveformOut,
 )
 from app.services.music_generation_service import music_engine
 from app.services.music_prompt_service import compose_music_prompt
@@ -30,6 +31,38 @@ def _to_generation_out(record) -> MusicGenerationOut:
     return payload
 
 
+def _run_generation_job(generation_id: int, seed: int | None = None) -> None:
+    db = SessionLocal()
+    try:
+        record = crud.get_music_generation(db, generation_id)
+        if not record:
+            return
+        record_id: int = int(getattr(record, "id"))
+        record_duration: int = int(getattr(record, "duration_seconds"))
+        record_prompt: str = str(getattr(record, "composed_prompt"))
+        try:
+            result = music_engine.generate_audio(
+                composed_prompt=record_prompt,
+                duration_seconds=record_duration,
+                generation_id=record_id,
+                seed=seed,
+            )
+            valid, _, detail = music_engine.validate_audio_file(result.audio_path)
+            if not valid:
+                raise RuntimeError(detail)
+            crud.mark_music_generation_completed(
+                db,
+                record,
+                audio_path=result.audio_path,
+                generation_time_ms=result.generation_time_ms,
+                sample_rate=result.sample_rate,
+            )
+        except Exception as exc:
+            crud.mark_music_generation_failed(db, record, str(exc))
+    finally:
+        db.close()
+
+
 @router.get("/health")
 def music_health() -> dict:
     supported = music_engine.supported_durations()
@@ -38,11 +71,18 @@ def music_health() -> dict:
         "music_engine": {
             "model": music_engine.model_id,
             "device": music_engine.device,
+            "model_loaded": music_engine.loaded,
             "supported_durations": supported,
             "default_duration": settings.music_default_duration_seconds,
             "max_duration": max(supported) if supported else settings.music_max_duration_seconds,
         },
     }
+
+
+@router.post("/warmup", response_model=MusicWarmupOut)
+def music_warmup() -> MusicWarmupOut:
+    payload = music_engine.warmup()
+    return MusicWarmupOut(status="ok", **payload)
 
 
 @router.get("/models")
@@ -63,7 +103,7 @@ def music_models() -> dict:
 
 
 @router.post("/generate", response_model=MusicGenerationOut)
-def generate_music(payload: MusicGenerateRequest, db: Session = Depends(get_db)):
+def generate_music(payload: MusicGenerateRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     supported = music_engine.supported_durations()
     if payload.duration_seconds not in supported:
         raise HTTPException(status_code=400, detail=f"duration_seconds must be one of {supported}")
@@ -90,27 +130,9 @@ def generate_music(payload: MusicGenerateRequest, db: Session = Depends(get_db))
         parent_generation_id=None,
     )
 
-    try:
-        result = music_engine.generate_audio(
-            composed_prompt=composed_prompt,
-            duration_seconds=payload.duration_seconds,
-            generation_id=record.id,
-            seed=payload.seed,
-        )
-        valid, _, detail = music_engine.validate_audio_file(result.audio_path)
-        if not valid:
-            raise RuntimeError(detail)
-        record = crud.mark_music_generation_completed(
-            db,
-            record,
-            audio_path=result.audio_path,
-            generation_time_ms=result.generation_time_ms,
-            sample_rate=result.sample_rate,
-        )
-        return _to_generation_out(record)
-    except Exception as exc:
-        crud.mark_music_generation_failed(db, record, str(exc))
-        raise HTTPException(status_code=500, detail=f"We couldn't generate this track. {exc}") from None
+    record_id: int = int(getattr(record, "id"))
+    background_tasks.add_task(_run_generation_job, record_id, payload.seed)
+    return _to_generation_out(record)
 
 
 @router.get("/generations", response_model=list[MusicGenerationOut])
@@ -128,14 +150,20 @@ def get_music_generation(generation_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/generations/{generation_id}/variation", response_model=MusicGenerationOut)
-def create_variation(generation_id: int, payload: MusicVariationRequest, db: Session = Depends(get_db)):
+def create_variation(
+    generation_id: int,
+    payload: MusicVariationRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     base = crud.get_music_generation(db, generation_id)
     if not base:
         raise HTTPException(status_code=404, detail="Base generation not found")
 
-    base_id = int(base.id)
+    base_id: int = int(getattr(base, "id"))
     base_prompt: str = str(base.user_prompt)
-    duration = payload.duration_seconds if payload.duration_seconds is not None else int(base.duration_seconds)
+    base_duration: int = int(getattr(base, "duration_seconds"))
+    duration = payload.duration_seconds if payload.duration_seconds is not None else base_duration
     supported = music_engine.supported_durations()
     if duration not in supported:
         raise HTTPException(status_code=400, detail=f"duration_seconds must be one of {supported}")
@@ -145,10 +173,10 @@ def create_variation(generation_id: int, payload: MusicVariationRequest, db: Ses
     base_energy: str = str(base.energy)
     base_instrumentation: str = str(base.instrumentation)
 
-    mood: str = cast(str, payload.mood) if payload.mood is not None else base_mood
-    style: str = cast(str, payload.style) if payload.style is not None else base_style
-    energy: str = cast(str, payload.energy) if payload.energy is not None else base_energy
-    instrumentation: str = cast(str, payload.instrumentation) if payload.instrumentation is not None else base_instrumentation
+    mood: str = payload.mood if payload.mood is not None else base_mood
+    style: str = payload.style if payload.style is not None else base_style
+    energy: str = payload.energy if payload.energy is not None else base_energy
+    instrumentation: str = payload.instrumentation if payload.instrumentation is not None else base_instrumentation
     prompt: str = base_prompt
 
     composed_prompt = compose_music_prompt(
@@ -175,27 +203,28 @@ def create_variation(generation_id: int, payload: MusicVariationRequest, db: Ses
         parent_generation_id=base_id,
     )
 
+    record_id: int = int(getattr(record, "id"))
+    background_tasks.add_task(_run_generation_job, record_id, payload.seed)
+    return _to_generation_out(record)
+
+
+@router.get("/generations/{generation_id}/waveform", response_model=MusicWaveformOut)
+def get_music_waveform(generation_id: int, points: int = 120, db: Session = Depends(get_db)):
+    record = crud.get_music_generation(db, generation_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Generation not found")
+    if str(record.status) != "completed" or not record.audio_path:
+        raise HTTPException(status_code=409, detail="Waveform is available only after generation completes")
+
     try:
-        result = music_engine.generate_audio(
-            composed_prompt=composed_prompt,
-            duration_seconds=duration,
-            generation_id=record.id,
-            seed=payload.seed,
-        )
-        valid, _, detail = music_engine.validate_audio_file(result.audio_path)
-        if not valid:
-            raise RuntimeError(detail)
-        record = crud.mark_music_generation_completed(
-            db,
-            record,
-            audio_path=result.audio_path,
-            generation_time_ms=result.generation_time_ms,
-            sample_rate=result.sample_rate,
-        )
-        return _to_generation_out(record)
+        peaks, _ = music_engine.extract_waveform_peaks(str(record.audio_path), points=points)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Audio file missing on disk") from None
     except Exception as exc:
-        crud.mark_music_generation_failed(db, record, str(exc))
-        raise HTTPException(status_code=500, detail=f"Variation generation failed. {exc}") from None
+        raise HTTPException(status_code=500, detail=f"Failed to derive waveform: {exc}") from None
+
+    record_id: int = int(getattr(record, "id"))
+    return MusicWaveformOut(generation_id=record_id, points=len(peaks), peaks=peaks)
 
 
 @router.get("/audio/{generation_id}")

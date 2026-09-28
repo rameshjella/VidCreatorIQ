@@ -114,10 +114,17 @@ export type MusicEngineHealth = {
   music_engine: {
     model: string;
     device: string;
+    model_loaded: boolean;
     supported_durations: number[];
     default_duration: number;
     max_duration: number;
   };
+};
+
+export type MusicWaveformOut = {
+  generation_id: number;
+  points: number;
+  peaks: number[];
 };
 
 export type MusicModelsResponse = {

@@ -415,6 +415,70 @@ def _npm_command() -> str:
     return "npm.cmd" if os.name == "nt" else "npm"
 
 
+def _music_warmup(api_base_url: str, combined_log: TextIO) -> bool:
+    endpoint = f"{api_base_url.rstrip('/')}/music/warmup"
+    _log_line("music", f"warming up music engine via {endpoint}", combined_log)
+    try:
+        response = requests.post(endpoint, timeout=180)
+        response.raise_for_status()
+        payload = response.json()
+        _log_line(
+            "music",
+            f"warmup ready={payload.get('ready')} device={payload.get('device')} load_time_ms={payload.get('load_time_ms')}",
+            combined_log,
+        )
+        return True
+    except Exception as exc:
+        _log_line("music", f"music warmup failed: {exc}", combined_log)
+        return False
+
+
+def _music_smoke(api_base_url: str, combined_log: TextIO) -> bool:
+    generate_url = f"{api_base_url.rstrip('/')}/music/generate"
+    payload = {
+        "prompt": "A peaceful cinematic piano piece inspired by rain at night.",
+        "title": "Launcher Smoke Track",
+        "mood": "Calm",
+        "style": "Cinematic",
+        "energy": "Low",
+        "instrumentation": "Piano and warm strings",
+        "duration_seconds": 4,
+    }
+
+    _log_line("music", f"submitting smoke generation to {generate_url}", combined_log)
+    try:
+        response = requests.post(generate_url, json=payload, timeout=30)
+        response.raise_for_status()
+        created = response.json()
+        generation_id = int(created.get("id", 0))
+        if generation_id <= 0:
+            raise RuntimeError("music smoke generation did not return a valid id")
+    except Exception as exc:
+        _log_line("music", f"music smoke request failed: {exc}", combined_log)
+        return False
+
+    poll_url = f"{api_base_url.rstrip('/')}/music/generations/{generation_id}"
+    deadline = time.time() + 360
+    while time.time() < deadline:
+        try:
+            poll_resp = requests.get(poll_url, timeout=10)
+            poll_resp.raise_for_status()
+            status = str(poll_resp.json().get("status", ""))
+            _log_line("music", f"smoke generation #{generation_id} status={status}", combined_log)
+            if status == "completed":
+                return True
+            if status == "failed":
+                detail = poll_resp.json().get("error_message", "generation failed")
+                _log_line("music", f"smoke generation failed: {detail}", combined_log)
+                return False
+        except Exception as exc:
+            _log_line("music", f"smoke polling warning: {exc}", combined_log)
+        time.sleep(2)
+
+    _log_line("music", "music smoke timed out waiting for completion", combined_log)
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Single-command launcher for FastAPI backend + React/Streamlit UI with full logs."
@@ -433,6 +497,8 @@ def main() -> int:
         help="Choose UI runtime. Defaults to react.",
     )
     parser.add_argument("--with-worker", action="store_true", help="Start RQ worker when Redis is configured.")
+    parser.add_argument("--music-warmup", action="store_true", help="Warm up the Music Studio model after API startup.")
+    parser.add_argument("--music-smoke", action="store_true", help="Run a real Music Studio smoke generation and poll for completion.")
     parser.add_argument("--with-comfyui", action="store_true", help="Start ComfyUI automatically when COMFYUI_START_COMMAND is configured.")
     parser.add_argument(
         "--with-comfyui-auto",
@@ -709,6 +775,16 @@ def main() -> int:
 
             _log_line("launcher", f"API ready: {api_url}", combined_log)
             _log_line("launcher", f"UI ready: {ui_url}", combined_log)
+
+            if args.music_warmup:
+                if not _music_warmup(env["API_BASE_URL"], combined_log):
+                    _log_line("launcher", "music warmup profile failed", combined_log)
+                    return 1
+
+            if args.music_smoke:
+                if not _music_smoke(env["API_BASE_URL"], combined_log):
+                    _log_line("launcher", "music smoke profile failed", combined_log)
+                    return 1
 
             if args.smoke_test:
                 _log_line("launcher", "smoke-test successful, stopping services", combined_log)

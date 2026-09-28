@@ -7,6 +7,7 @@ import type {
   MusicEngineHealth,
   MusicGenerationOut,
   MusicModelsResponse,
+  MusicWaveformOut,
   MovieRunResponse,
   ProjectOut,
   SceneOut,
@@ -64,6 +65,7 @@ export const api = {
       body: JSON.stringify({ scene_id: sceneId }),
     }),
   musicHealth: (baseUrl: string) => requestJson<MusicEngineHealth>(`${baseUrl}/music/health`),
+  musicWarmup: (baseUrl: string) => requestJson(`${baseUrl}/music/warmup`, { method: "POST" }),
   musicModels: (baseUrl: string) => requestJson<MusicModelsResponse>(`${baseUrl}/music/models`),
   musicGenerate: (
     baseUrl: string,
@@ -104,5 +106,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
+  getMusicWaveform: (baseUrl: string, generationId: number, points = 140) =>
+    requestJson<MusicWaveformOut>(`${baseUrl}/music/generations/${generationId}/waveform?points=${points}`),
 };
 

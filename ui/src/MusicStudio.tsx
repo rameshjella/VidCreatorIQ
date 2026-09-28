@@ -43,6 +43,7 @@ export default function MusicStudio({ apiBase }: Props) {
 
   const [state, setState] = useState<"READY" | "GENERATING" | "COMPLETED" | "FAILED">("READY");
   const [error, setError] = useState("");
+  const [waveformPeaks, setWaveformPeaks] = useState<number[]>([]);
 
   const supportedDurations = useMemo(() => engineHealth?.music_engine.supported_durations ?? [4, 8, 12, 16], [engineHealth]);
 
@@ -65,6 +66,38 @@ export default function MusicStudio({ apiBase }: Props) {
     }
   }, [supportedDurations, durationSeconds]);
 
+  useEffect(() => {
+    async function loadWaveform() {
+      if (!selected || selected.status !== "completed") {
+        setWaveformPeaks([]);
+        return;
+      }
+      try {
+        const waveform = await api.getMusicWaveform(apiBase, selected.id, 160);
+        setWaveformPeaks(waveform.peaks);
+      } catch {
+        setWaveformPeaks([]);
+      }
+    }
+    void loadWaveform();
+  }, [apiBase, selected?.id, selected?.status]);
+
+  async function pollUntilDone(generationId: number): Promise<MusicGenerationOut> {
+    const maxChecks = 120;
+    for (let attempt = 0; attempt < maxChecks; attempt += 1) {
+      const current = await api.getMusicGeneration(apiBase, generationId);
+      setSelected(current);
+      if (current.status === "completed") {
+        return current;
+      }
+      if (current.status === "failed") {
+        throw new Error(current.error_message || "Generation failed");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+    throw new Error("Generation is taking longer than expected. Please check status again.");
+  }
+
   async function generateMusic() {
     if (!prompt.trim()) {
       setError("Describe your music before generating.");
@@ -85,6 +118,8 @@ export default function MusicStudio({ apiBase }: Props) {
         duration_seconds: durationSeconds,
       });
       setSelected(created);
+      const finalItem = await pollUntilDone(created.id);
+      setSelected(finalItem);
       setState("COMPLETED");
       await refreshMusicData();
     } catch (err) {
@@ -116,6 +151,8 @@ export default function MusicStudio({ apiBase }: Props) {
         duration_seconds: durationSeconds,
       });
       setSelected(variation);
+      const finalItem = await pollUntilDone(variation.id);
+      setSelected(finalItem);
       setState("COMPLETED");
       await refreshMusicData();
     } catch (err) {
@@ -132,6 +169,9 @@ export default function MusicStudio({ apiBase }: Props) {
         <div className="pillRow">
           <span className="pill ok">Model: {engineHealth?.music_engine.model ?? "loading..."}</span>
           <span className="pill">Device: {engineHealth?.music_engine.device ?? "unknown"}</span>
+          <span className={`pill ${engineHealth?.music_engine.model_loaded ? "ok" : ""}`}>
+            Engine: {engineHealth?.music_engine.model_loaded ? "Ready" : "Preparing"}
+          </span>
           <span className="pill">Durations: {supportedDurations.join(" / ")}s</span>
         </div>
       </div>
@@ -197,6 +237,8 @@ export default function MusicStudio({ apiBase }: Props) {
             {state === "GENERATING" ? "Creating your track..." : "Generate Music"}
           </button>
 
+          {state === "GENERATING" && <p className="help">Creating your track... this can take longer on CPU.</p>}
+
           {state === "FAILED" && <p className="error">We couldn't generate this track. {error}</p>}
           {state === "COMPLETED" && <p className="success">Your track is ready.</p>}
         </article>
@@ -213,7 +255,22 @@ export default function MusicStudio({ apiBase }: Props) {
               {selected.audio_url ? (
                 <audio className="audioPlayer" controls src={`${apiBase}${selected.audio_url}`} preload="metadata" />
               ) : (
-                <div className="help">Audio is not available for this generation.</div>
+                <div className="help">
+                  {selected.status === "generating"
+                    ? "Creating your track..."
+                    : "Audio is not available for this generation."}
+                </div>
+              )}
+              {waveformPeaks.length > 0 && (
+                <div className="waveform" aria-label="Audio waveform">
+                  <svg viewBox={`0 0 ${waveformPeaks.length} 40`} preserveAspectRatio="none" role="img">
+                    {waveformPeaks.map((peak, idx) => {
+                      const h = Math.max(2, Math.min(38, Math.round(peak * 38)));
+                      const y = Math.round((40 - h) / 2);
+                      return <rect key={`${idx}`} x={idx} y={y} width="0.8" height={h} rx="0.4" />;
+                    })}
+                  </svg>
+                </div>
               )}
               <div className="help">Generated in {formatMs(selected.generation_time_ms)} · Duration {selected.duration_seconds}s</div>
               <div className="row">

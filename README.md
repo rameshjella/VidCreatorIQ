@@ -101,6 +101,12 @@ python run_ai_movie_maker.py --with-comfyui-auto
 
 # smoke-test startup and auto-stop
 python run_ai_movie_maker.py --smoke-test
+
+# warm up Music Studio model cache once API is up
+python run_ai_movie_maker.py --music-warmup
+
+# run an end-to-end Music Studio generation smoke check
+python run_ai_movie_maker.py --music-smoke
 ```
 
 Logs are written to `logs/`:
@@ -221,16 +227,20 @@ The React app includes a **Music Studio** tab for local generative music:
 - Variation generation from previous tracks
 - SQLite-backed generation history
 - WAV playback + download
+- Async non-blocking generation + polling status updates
+- Waveform visualization derived from the actual generated WAV audio
 
 Primary backend endpoints:
 
 - `GET /music/health`
+- `POST /music/warmup`
 - `GET /music/models`
 - `POST /music/generate`
 - `GET /music/generations`
 - `GET /music/generations/{id}`
 - `POST /music/generations/{id}/variation`
 - `GET /music/audio/{id}`
+- `GET /music/generations/{id}/waveform?points=140`
 
 ## Sample Script
 

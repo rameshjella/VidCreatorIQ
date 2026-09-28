@@ -24,6 +24,7 @@ class GenerationResult:
 class MusicGenerationEngine:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._infer_lock = threading.Lock()
         self._model = None
         self._processor = None
         self._model_id = settings.music_model_id.strip() or "facebook/musicgen-small"
@@ -44,6 +45,10 @@ class MusicGenerationEngine:
     @property
     def model_id(self) -> str:
         return self._model_id
+
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None and self._processor is not None
 
     def supported_durations(self) -> list[int]:
         values: list[int] = []
@@ -68,6 +73,16 @@ class MusicGenerationEngine:
             self._model = MusicgenForConditionalGeneration.from_pretrained(self._model_id)
             if self._device == "cuda":
                 self._model = self._model.to("cuda")
+
+    def warmup(self) -> dict:
+        start = time.perf_counter()
+        self._ensure_loaded()
+        return {
+            "model": self._model_id,
+            "device": self._device,
+            "load_time_ms": int((time.perf_counter() - start) * 1000),
+            "ready": self._model is not None and self._processor is not None,
+        }
 
     def _save_wave(self, values: np.ndarray, sample_rate: int, output_path: Path) -> None:
         values = np.clip(values, -1.0, 1.0)
@@ -109,13 +124,14 @@ class MusicGenerationEngine:
             inputs = {k: v.to("cuda") if hasattr(v, "to") else v for k, v in inputs.items()}
 
         infer_start = time.perf_counter()
-        with torch.inference_mode():
-            audio_values = self._model.generate(
-                **inputs,
-                do_sample=True,
-                guidance_scale=3.0,
-                max_new_tokens=max_new_tokens,
-            )
+        with self._infer_lock:
+            with torch.inference_mode():
+                audio_values = self._model.generate(
+                    **inputs,
+                    do_sample=True,
+                    guidance_scale=3.0,
+                    max_new_tokens=max_new_tokens,
+                )
         generation_time_ms = int((time.perf_counter() - infer_start) * 1000)
 
         values = audio_values[0, 0].detach().cpu().numpy()
@@ -144,6 +160,40 @@ class MusicGenerationEngine:
                 return True, duration, "ok"
         except wave.Error as exc:
             return False, 0.0, f"Audio decode failed: {exc}"
+
+    def extract_waveform_peaks(self, path: str, points: int = 120) -> tuple[list[float], int]:
+        """Extract absolute-amplitude peaks from PCM WAV audio for honest UI waveform rendering."""
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError("Audio file not found")
+
+        with wave.open(str(p), "rb") as wf:
+            channels = wf.getnchannels()
+            sample_width = wf.getsampwidth()
+            frame_count = wf.getnframes()
+            raw = wf.readframes(frame_count)
+
+        if sample_width != 2:
+            raise ValueError(f"Unsupported WAV sample width: {sample_width}")
+
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+        if channels > 1:
+            samples = samples.reshape(-1, channels).mean(axis=1)
+        samples = np.abs(samples) / 32767.0
+
+        if samples.size == 0:
+            return [0.0 for _ in range(max(8, points))], 0
+
+        bins = max(8, int(points))
+        chunk = max(1, samples.size // bins)
+        peaks: list[float] = []
+        for idx in range(bins):
+            start = idx * chunk
+            end = samples.size if idx == bins - 1 else min(samples.size, (idx + 1) * chunk)
+            window = samples[start:end]
+            peaks.append(float(window.max()) if window.size else 0.0)
+
+        return peaks, int(samples.size)
 
 
 music_engine = MusicGenerationEngine()
