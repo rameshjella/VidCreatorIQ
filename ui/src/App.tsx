@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "./api";
+import MusicStudio from "./MusicStudio";
 import type { DependenciesResponse, DependencyDoctorResponse, JobEventOut, JobOut, ProjectOut } from "./types";
 
 const defaultBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -12,7 +13,7 @@ type SceneDraft = {
   title: string;
 };
 
-type TabKey = "launch" | "project" | "jobs" | "timeline" | "system";
+type TabKey = "launch" | "project" | "jobs" | "timeline" | "system" | "music";
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -260,6 +261,9 @@ export default function App() {
         </button>
         <button className={activeTab === "system" ? "tab selected" : "tab"} onClick={() => setActiveTab("system")}>
           System
+        </button>
+        <button className={activeTab === "music" ? "tab selected" : "tab"} onClick={() => setActiveTab("music")}>
+          Music Studio
         </button>
       </nav>
 
@@ -527,6 +531,8 @@ export default function App() {
           </section>
         </>
       )}
+
+      {activeTab === "music" && <MusicStudio apiBase={apiBase} />}
 
       {message && <div className="toast">{message}</div>}
     </div>

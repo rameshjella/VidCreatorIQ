@@ -97,3 +97,47 @@ class JobEventOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MusicGenerateRequest(BaseModel):
+    prompt: str = Field(min_length=3)
+    title: str = "Untitled Track"
+    mood: str = "Emotional"
+    style: str = "Cinematic"
+    energy: str = "Medium"
+    instrumentation: str = "Piano and strings"
+    duration_seconds: int = Field(default=8, ge=1, le=60)
+    seed: int | None = None
+
+
+class MusicVariationRequest(BaseModel):
+    title: str | None = None
+    mood: str | None = None
+    style: str | None = None
+    energy: str | None = None
+    instrumentation: str | None = None
+    duration_seconds: int | None = Field(default=None, ge=1, le=60)
+    seed: int | None = None
+
+
+class MusicGenerationOut(BaseModel):
+    id: int
+    title: str
+    status: str
+    user_prompt: str
+    composed_prompt: str
+    model: str
+    mood: str
+    style: str
+    energy: str
+    instrumentation: str
+    duration_seconds: int
+    generation_time_ms: int
+    sample_rate: int
+    created_at: datetime
+    parent_generation_id: int | None
+    error_message: str
+    audio_url: str | None = None
+    generation_label: str | None = None
+
+    model_config = {"from_attributes": True}
+
+

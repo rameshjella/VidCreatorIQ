@@ -93,3 +93,74 @@ def update_scene_timeline(
     return list(db.scalars(stmt).all())
 
 
+def create_music_generation(
+    db: Session,
+    *,
+    title: str,
+    user_prompt: str,
+    composed_prompt: str,
+    model: str,
+    mood: str,
+    style: str,
+    energy: str,
+    instrumentation: str,
+    duration_seconds: int,
+    parent_generation_id: int | None = None,
+) -> models.MusicGeneration:
+    record = models.MusicGeneration(
+        title=title,
+        user_prompt=user_prompt,
+        composed_prompt=composed_prompt,
+        model=model,
+        mood=mood,
+        style=style,
+        energy=energy,
+        instrumentation=instrumentation,
+        duration_seconds=duration_seconds,
+        status="generating",
+        parent_generation_id=parent_generation_id,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def get_music_generation(db: Session, generation_id: int) -> models.MusicGeneration | None:
+    stmt = select(models.MusicGeneration).where(models.MusicGeneration.id == generation_id)
+    return db.scalar(stmt)
+
+
+def list_music_generations(db: Session, limit: int = 50) -> list[models.MusicGeneration]:
+    stmt = select(models.MusicGeneration).order_by(models.MusicGeneration.created_at.desc()).limit(limit)
+    return list(db.scalars(stmt).all())
+
+
+def mark_music_generation_completed(
+    db: Session,
+    record: models.MusicGeneration,
+    *,
+    audio_path: str,
+    generation_time_ms: int,
+    sample_rate: int,
+) -> models.MusicGeneration:
+    record.status = "completed"
+    record.audio_path = audio_path
+    record.generation_time_ms = generation_time_ms
+    record.sample_rate = sample_rate
+    record.error_message = ""
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def mark_music_generation_failed(db: Session, record: models.MusicGeneration, error_message: str) -> models.MusicGeneration:
+    record.status = "failed"
+    record.error_message = error_message[:1000]
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+

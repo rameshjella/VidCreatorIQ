@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.music_routes import router as music_router
 from app.api.routes import router
 from app.database import Base, engine
 from app.migrations import run_startup_migrations
@@ -32,4 +33,5 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(music_router)
 

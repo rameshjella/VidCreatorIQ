@@ -109,3 +109,47 @@ export type JobEventOut = {
   created_at: string;
 };
 
+export type MusicEngineHealth = {
+  status: string;
+  music_engine: {
+    model: string;
+    device: string;
+    supported_durations: number[];
+    default_duration: number;
+    max_duration: number;
+  };
+};
+
+export type MusicModelsResponse = {
+  status: string;
+  models: Array<{
+    id: string;
+    provider: string;
+    device: string;
+    supports_local_inference: boolean;
+    supports_variation: boolean;
+    supported_durations: number[];
+  }>;
+};
+
+export type MusicGenerationOut = {
+  id: number;
+  title: string;
+  status: "ready" | "generating" | "completed" | "failed" | string;
+  user_prompt: string;
+  composed_prompt: string;
+  model: string;
+  mood: string;
+  style: string;
+  energy: string;
+  instrumentation: string;
+  duration_seconds: number;
+  generation_time_ms: number;
+  sample_rate: number;
+  created_at: string;
+  parent_generation_id: number | null;
+  error_message: string;
+  audio_url: string | null;
+  generation_label: string | null;
+};
+

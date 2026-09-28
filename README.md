@@ -16,6 +16,7 @@ AI Movie Maker converts a script into a narrated MP4 with one click.
 - ComfyUI integration point for image generation (with local placeholder fallback)
 - Piper integration for local neural TTS (with `pyttsx3` fallback)
 - FFmpeg-based clip creation, subtitle generation, and final MP4 muxing
+- AI Music Studio tab with real local text-to-music generation, variation, and persisted history
 
 ## Architecture
 
@@ -210,6 +211,26 @@ Services:
 ```bash
 pytest -q
 ```
+
+## AI Music Studio
+
+The React app includes a **Music Studio** tab for local generative music:
+
+- Prompt + mood/style/energy/instrumentation controls
+- Real model inference through local `transformers` + `torch`
+- Variation generation from previous tracks
+- SQLite-backed generation history
+- WAV playback + download
+
+Primary backend endpoints:
+
+- `GET /music/health`
+- `GET /music/models`
+- `POST /music/generate`
+- `GET /music/generations`
+- `GET /music/generations/{id}`
+- `POST /music/generations/{id}/variation`
+- `GET /music/audio/{id}`
 
 ## Sample Script
 

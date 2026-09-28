@@ -4,6 +4,9 @@ import type {
   HealthResponse,
   JobEventOut,
   JobOut,
+  MusicEngineHealth,
+  MusicGenerationOut,
+  MusicModelsResponse,
   MovieRunResponse,
   ProjectOut,
   SceneOut,
@@ -59,6 +62,47 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scene_id: sceneId }),
+    }),
+  musicHealth: (baseUrl: string) => requestJson<MusicEngineHealth>(`${baseUrl}/music/health`),
+  musicModels: (baseUrl: string) => requestJson<MusicModelsResponse>(`${baseUrl}/music/models`),
+  musicGenerate: (
+    baseUrl: string,
+    payload: {
+      prompt: string;
+      title: string;
+      mood: string;
+      style: string;
+      energy: string;
+      instrumentation: string;
+      duration_seconds: number;
+      seed?: number;
+    },
+  ) =>
+    requestJson<MusicGenerationOut>(`${baseUrl}/music/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  listMusicGenerations: (baseUrl: string) => requestJson<MusicGenerationOut[]>(`${baseUrl}/music/generations`),
+  getMusicGeneration: (baseUrl: string, generationId: number) =>
+    requestJson<MusicGenerationOut>(`${baseUrl}/music/generations/${generationId}`),
+  createMusicVariation: (
+    baseUrl: string,
+    generationId: number,
+    payload: {
+      title?: string;
+      mood?: string;
+      style?: string;
+      energy?: string;
+      instrumentation?: string;
+      duration_seconds?: number;
+      seed?: number;
+    },
+  ) =>
+    requestJson<MusicGenerationOut>(`${baseUrl}/music/generations/${generationId}/variation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     }),
 };
 

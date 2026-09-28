@@ -73,3 +73,25 @@ class JobEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class MusicGeneration(Base):
+    __tablename__ = "music_generations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    title: Mapped[str] = mapped_column(String(255), default="Untitled Track")
+    user_prompt: Mapped[str] = mapped_column(Text)
+    composed_prompt: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(String(255), default="")
+    mood: Mapped[str] = mapped_column(String(64), default="")
+    style: Mapped[str] = mapped_column(String(64), default="")
+    energy: Mapped[str] = mapped_column(String(32), default="")
+    instrumentation: Mapped[str] = mapped_column(String(255), default="")
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=8)
+    status: Mapped[str] = mapped_column(String(32), default="ready")
+    audio_path: Mapped[str] = mapped_column(String(512), default="")
+    generation_time_ms: Mapped[int] = mapped_column(Integer, default=0)
+    sample_rate: Mapped[int] = mapped_column(Integer, default=32000)
+    parent_generation_id: Mapped[int | None] = mapped_column(ForeignKey("music_generations.id"), nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+

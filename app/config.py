@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     queue_name: str = "ai_movie_maker"
     rq_retry_max: int = 3
     rq_retry_intervals: str = "20,60,180"
+    music_model_id: str = "facebook/musicgen-small"
+    music_output_dir: str = "./workspace/music"
+    music_max_duration_seconds: int = 16
+    music_default_duration_seconds: int = 8
+    music_allowed_durations: str = "4,8,12,16"
+    music_debug_metrics: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
