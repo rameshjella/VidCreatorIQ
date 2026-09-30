@@ -1,13 +1,35 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Movie Maker</title>
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="description" content="VidCreatorIQ — turn any script into a finished, narrated film." />
+    <title>VidCreatorIQ — AI Film Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      // Apply the saved theme before first paint so there is no flash of the
+      // wrong palette. Light is the default when nothing has been stored.
+      (function () {
+        try {
+          var stored = localStorage.getItem("vidcreatoriq.theme");
+          document.documentElement.setAttribute(
+            "data-theme",
+            stored === "dark" ? "dark" : "light"
+          );
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

@@ -1,541 +1,1352 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "./api";
 import MusicStudio from "./MusicStudio";
-import type { DependenciesResponse, DependencyDoctorResponse, JobEventOut, JobOut, ProjectOut } from "./types";
+import { useTheme, type Theme } from "./theme";
+import {
+  Alert,
+  Badge,
+  Card,
+  EmptyState,
+  Field,
+  Progress,
+  Segmented,
+  Skeleton,
+  Stat,
+  ToastProvider,
+  formatDuration,
+  useToast,
+} from "./components/ui";
+import type {
+  DependenciesResponse,
+  JobArtifacts,
+  JobEventOut,
+  JobOut,
+  ProjectOut,
+  TTSProvidersResponse,
+  TTSVoice,
+} from "./types";
 
-const defaultBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || "http://127.0.0.1:8000";
 
-type SceneDraft = {
-  scene_id: number;
-  scene_index: number;
-  duration_seconds: number;
-  title: string;
-};
+type View = "studio" | "storyboard" | "voice" | "render" | "preview" | "music" | "system";
 
-type TabKey = "launch" | "project" | "jobs" | "timeline" | "system" | "music";
+const NAV: Array<{ id: View; label: string; icon: string; group: string }> = [
+  { id: "studio", label: "Script Studio", icon: "\u270E", group: "Create" },
+  { id: "storyboard", label: "Storyboard", icon: "\u25A6", group: "Create" },
+  { id: "voice", label: "Voice Studio", icon: "\u25C9", group: "Create" },
+  { id: "music", label: "Music Studio", icon: "\u266A", group: "Create" },
+  { id: "render", label: "Render Console", icon: "\u25B6", group: "Produce" },
+  { id: "preview", label: "Preview & Export", icon: "\u25C8", group: "Produce" },
+  { id: "system", label: "System Health", icon: "\u2699", group: "Settings" },
+];
 
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
+const RENDER_STAGES = [
+  { id: "director", label: "Analysing script" },
+  { id: "narrator", label: "Voicing narration" },
+  { id: "storyboard", label: "Generating visuals" },
+  { id: "videographer", label: "Rendering clips" },
+  { id: "editor", label: "Assembling & mastering" },
+  { id: "done", label: "Movie ready" },
+];
 
-function statusClass(ready: boolean): string {
-  return ready ? "ok" : "bad";
-}
+const SAMPLE_SCRIPT = `The lighthouse had stood for a hundred years, and it had never once gone dark.
 
-export default function App() {
-  const [apiBase, setApiBase] = useState(defaultBaseUrl);
-  const [apiOnline, setApiOnline] = useState<boolean | null>(null);
+Tonight the storm came in fast, swallowing the horizon whole. Rain moved sideways across the cliffs.
 
-  const [dependencies, setDependencies] = useState<DependenciesResponse | null>(null);
-  const [doctor, setDoctor] = useState<DependencyDoctorResponse | null>(null);
-  const [dependencyError, setDependencyError] = useState("");
+Far below, a single fishing boat fought the swell, its engine straining against water that wanted it gone.
 
-  const [title, setTitle] = useState("My AI Movie");
-  const [scriptText, setScriptText] = useState("");
-  const [mode, setMode] = useState<"basic" | "cinematic">("basic");
+Then the beam swung around, steady and patient and certain, and cut a road of light straight through the dark.
 
-  const [projectId, setProjectId] = useState<number | null>(null);
+The boat turned toward it. And the lighthouse, as always, kept burning.`;
+
+/* ========================================================================== */
+/* Shell                                                                      */
+/* ========================================================================== */
+
+function Shell() {
+  const toast = useToast();
+  const [theme, setTheme] = useTheme();
+
+  const [view, setView] = useState<View>("studio");
+  const [navOpen, setNavOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const [title, setTitle] = useState("The Lighthouse");
+  const [script, setScript] = useState(SAMPLE_SCRIPT);
+  const [language, setLanguage] = useState("en");
+  const [visualMode, setVisualMode] = useState<"basic" | "cinematic">("basic");
+
   const [project, setProject] = useState<ProjectOut | null>(null);
-  const [timelineDraft, setTimelineDraft] = useState<SceneDraft[]>([]);
-
-  const [jobId, setJobId] = useState<number | null>(null);
   const [job, setJob] = useState<JobOut | null>(null);
-  const [jobEvents, setJobEvents] = useState<JobEventOut[]>([]);
+  const [events, setEvents] = useState<JobEventOut[]>([]);
+  const [artifacts, setArtifacts] = useState<JobArtifacts | null>(null);
 
-  const [resumeSceneIndex, setResumeSceneIndex] = useState(1);
+  const [deps, setDeps] = useState<DependenciesResponse | null>(null);
+  const [providers, setProviders] = useState<TTSProvidersResponse | null>(null);
+  const [voices, setVoices] = useState<TTSVoice[]>([]);
+  const [provider, setProvider] = useState("");
+  const [voice, setVoice] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewBusy, setPreviewBusy] = useState(false);
+
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [projects, setProjects] = useState<ProjectOut[]>([]);
+  const pollRef = useRef<number | null>(null);
 
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [refreshSeconds, setRefreshSeconds] = useState(4);
-  const [activeTab, setActiveTab] = useState<TabKey>("launch");
+  /* --- Bootstrap --------------------------------------------------------- */
+  const refreshDeps = useCallback(() => {
+    api
+      .dependencies(BASE_URL)
+      .then(setDeps)
+      .catch(() => setDeps(null));
+  }, []);
 
-  async function refreshHealth() {
-    try {
-      await api.health(apiBase);
-      setApiOnline(true);
-    } catch {
-      setApiOnline(false);
-    }
-  }
+  const refreshProjects = useCallback(() => {
+    api
+      .listProjects(BASE_URL)
+      .then((list) => setProjects(list.slice().reverse()))
+      .catch(() => setProjects([]));
+  }, []);
 
-  async function refreshDependencies() {
-    try {
-      const [deps, doctorPayload] = await Promise.all([api.dependencies(apiBase), api.dependencyDoctor(apiBase)]);
-      setDependencies(deps);
-      setDoctor(doctorPayload);
-      setDependencyError("");
-    } catch (error) {
-      setDependencyError(toErrorMessage(error));
-    }
-  }
-
-  async function refreshProject() {
-    if (!projectId) {
-      return;
-    }
-    const payload = await api.getProject(apiBase, projectId);
-    setProject(payload);
-    setTimelineDraft(
-      payload.scenes.map((scene) => ({
-        scene_id: scene.id,
-        scene_index: scene.scene_index,
-        duration_seconds: scene.duration_seconds,
-        title: scene.title,
-      })),
-    );
-  }
-
-  async function refreshJob() {
-    if (!jobId) {
-      return;
-    }
-    const [jobPayload, eventsPayload] = await Promise.all([api.getJob(apiBase, jobId), api.getJobEvents(apiBase, jobId)]);
-    setJob(jobPayload);
-    setJobEvents(eventsPayload);
-  }
-
-  async function refreshAll() {
-    await Promise.all([refreshHealth(), refreshDependencies(), refreshProject(), refreshJob()]);
-  }
+  /** Open a previously rendered project in the Storyboard / Preview views. */
+  const openProject = useCallback(
+    async (projectId: number) => {
+      try {
+        const full = await api.getProject(BASE_URL, projectId);
+        setProject(full);
+        setTitle(full.title);
+        setScript(full.script_text);
+        try {
+          setArtifacts(await api.projectArtifacts(BASE_URL, projectId));
+        } catch {
+          // Project exists but was never rendered - show scenes without media.
+          setArtifacts(null);
+        }
+      } catch (err) {
+        toast("error", err instanceof Error ? err.message : "Could not open that project.");
+      }
+    },
+    [toast],
+  );
 
   useEffect(() => {
-    void refreshHealth();
-    void refreshDependencies();
-  }, [apiBase]);
+    refreshDeps();
+    refreshProjects();
+    api
+      .ttsProviders(BASE_URL)
+      .then((data) => {
+        setProviders(data);
+        const firstReady = data.providers.find((p) => p.configured);
+        setProvider(data.active || firstReady?.id || "");
+      })
+      .catch(() => setProviders(null));
+  }, [refreshDeps, refreshProjects]);
 
   useEffect(() => {
-    if (!autoRefresh) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      void refreshAll();
-    }, refreshSeconds * 1000);
-    return () => window.clearInterval(timer);
-  }, [autoRefresh, refreshSeconds, apiBase, projectId, jobId]);
-
-  const canRunMovie = useMemo(() => {
-    if (!dependencies) {
-      return false;
-    }
-    return mode === "basic" ? dependencies.ready_for_generation : dependencies.ready_for_cinematic;
-  }, [dependencies, mode]);
-
-  const progressPercent = job ? Math.max(0, Math.min(100, Math.round(job.progress * 100))) : 0;
-  const blockingIssues = doctor?.findings.filter((item) => item.severity === "error").length ?? 0;
-
-  async function createProject() {
-    const text = scriptText.trim();
-    if (text.length < 20) {
-      setMessage("Script must be at least 20 characters.");
-      return;
-    }
-    setBusy(true);
-    setMessage("");
-    try {
-      const payload = await api.createProject(apiBase, {
-        title: title.trim() || "My AI Movie",
-        script_text: text,
-        language: "en",
+    if (!provider) return;
+    let cancelled = false;
+    api
+      .ttsVoices(BASE_URL, provider)
+      .then((data) => {
+        if (cancelled) return;
+        setVoices(data.voices);
+        setVoice(data.voices[0]?.id ?? "");
+      })
+      .catch(() => {
+        if (!cancelled) setVoices([]);
       });
-      setProjectId(payload.id);
-      setProject(payload);
-      setMessage(`Project #${payload.id} created successfully.`);
-    } catch (error) {
-      setMessage(toErrorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, [provider]);
 
-  async function runMovie() {
-    if (!projectId) {
-      setMessage("Create a project first.");
+  /* --- Command palette (Cmd/Ctrl + K) ------------------------------------ */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+      if (e.key === "Escape") setPaletteOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  /* --- Job polling ------------------------------------------------------- */
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback(
+    (jobId: number, projectId: number) => {
+      stopPolling();
+      pollRef.current = window.setInterval(async () => {
+        try {
+          const [next, log] = await Promise.all([
+            api.getJob(BASE_URL, jobId),
+            api.getJobEvents(BASE_URL, jobId),
+          ]);
+          setJob(next);
+          setEvents(log);
+
+          // Pull artifacts every tick so the storyboard fills in scene by scene
+          // while the render is still running, instead of only at the end.
+          api
+            .jobArtifacts(BASE_URL, jobId)
+            .then(setArtifacts)
+            .catch(() => undefined);
+
+          if (next.status === "completed" || next.status === "failed") {
+            stopPolling();
+            setBusy(false);
+
+            if (next.status === "completed") {
+              const [art, proj] = await Promise.all([
+                api.jobArtifacts(BASE_URL, jobId),
+                api.getProject(BASE_URL, projectId),
+              ]);
+              setArtifacts(art);
+              setProject(proj);
+              refreshProjects();
+              setView("preview");
+              toast("success", `Movie ready - ${formatDuration(art.duration_seconds)}`);
+            } else {
+              setError(next.last_error || next.message);
+              toast("error", "Render failed. See the console for details.");
+            }
+          }
+        } catch {
+          /* transient network hiccup; the next tick retries */
+        }
+      }, 1500);
+    },
+    [stopPolling, toast, refreshProjects],
+  );
+
+  useEffect(() => stopPolling, [stopPolling]);
+
+  /* --- Actions ----------------------------------------------------------- */
+  const handleGenerate = useCallback(async () => {
+    if (!script.trim()) {
+      toast("error", "Write a script first.");
+      setView("studio");
       return;
     }
     setBusy(true);
-    setMessage("");
-    try {
-      const payload = await api.runProject(apiBase, projectId, mode);
-      setJobId(payload.job_id);
-      setMessage(`Job #${payload.job_id} queued.`);
-      await refreshJob();
-    } catch (error) {
-      setMessage(toErrorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  }
+    setError("");
+    setArtifacts(null);
+    setEvents([]);
+    setJob(null);
+    setView("render");
 
-  async function resumeJob() {
-    if (!jobId) {
-      setMessage("No job selected.");
-      return;
-    }
-    setBusy(true);
     try {
-      await api.resumeJob(apiBase, jobId, resumeSceneIndex);
-      setMessage("Resume requested.");
-      await refreshJob();
-    } catch (error) {
-      setMessage(toErrorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-  }
+      const created = await api.createProject(BASE_URL, {
+        title: title.trim() || "Untitled Project",
+        script_text: script,
+        language,
+      });
+      setProject(created);
 
-  async function saveTimeline() {
-    if (!projectId) {
-      return;
-    }
-    setBusy(true);
-    try {
-      await api.updateTimeline(
-        apiBase,
-        projectId,
-        timelineDraft.map((scene) => ({
-          scene_id: scene.scene_id,
-          scene_index: scene.scene_index,
-          duration_seconds: scene.duration_seconds,
-        })),
-      );
-      setMessage("Timeline updated.");
-      await refreshProject();
-    } catch (error) {
-      setMessage(toErrorMessage(error));
-    } finally {
+      const run = await api.runProject(BASE_URL, created.id, visualMode);
+      setJob(await api.getJob(BASE_URL, run.job_id));
+      startPolling(run.job_id, created.id);
+      toast("info", "Render started.");
+    } catch (err) {
       setBusy(false);
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      toast("error", "Could not start the render.");
     }
-  }
+  }, [script, title, language, visualMode, startPolling, toast]);
 
-  async function regenerateScene(sceneId: number) {
-    if (!projectId) {
-      return;
-    }
-    setBusy(true);
+  const handlePreviewVoice = useCallback(async () => {
+    setPreviewBusy(true);
     try {
-      await api.regenerateScene(apiBase, projectId, sceneId);
-      setMessage(`Scene ${sceneId} regenerated.`);
-      await refreshProject();
-    } catch (error) {
-      setMessage(toErrorMessage(error));
+      const url = await api.ttsPreviewUrl(BASE_URL, {
+        text: script.slice(0, 300),
+        provider: provider || null,
+        voice,
+      });
+      setPreviewUrl(url);
+    } catch (err) {
+      toast("error", err instanceof Error ? err.message : "Voice preview failed.");
     } finally {
-      setBusy(false);
+      setPreviewBusy(false);
     }
-  }
+  }, [script, provider, voice, toast]);
+
+  const handleNewProject = useCallback(() => {
+    stopPolling();
+    setProject(null);
+    setJob(null);
+    setEvents([]);
+    setArtifacts(null);
+    setError("");
+    setBusy(false);
+    setTitle("Untitled Project");
+    setScript("");
+    setView("studio");
+  }, [stopPolling]);
+
+  /* --- Derived ----------------------------------------------------------- */
+  const scenes = project?.scenes ?? [];
+  const wordCount = useMemo(() => script.trim().split(/\s+/).filter(Boolean).length, [script]);
+  const estimatedRuntime = Math.round((wordCount / 150) * 60);
+  const stageIndex = RENDER_STAGES.findIndex((s) => s.id === (job?.stage ?? ""));
+
+  const navGroups = useMemo(() => {
+    const groups = new Map<string, typeof NAV>();
+    NAV.forEach((item) => groups.set(item.group, [...(groups.get(item.group) ?? []), item]));
+    return [...groups.entries()];
+  }, []);
+
+  const isLocked = useCallback(
+    (_id: View) =>
+      // Nothing is gated any more. Every view renders a useful empty state (and
+      // Storyboard/Preview can load any previous project), so disabling nav just
+      // made the app feel broken before the first render finished.
+      false,
+    [],
+  );
+
+  const current = NAV.find((n) => n.id === view);
 
   return (
     <div className="app">
-      <header className="hero card">
-        <div>
-          <div className="eyebrow">VidCreatorIQ</div>
-          <h1>AI Movie Maker Studio</h1>
-          <p className="subhead">A modern production console for script-to-cinematic video generation.</p>
-        </div>
-        <div className="heroActions">
-          <button className="ghost" disabled={busy} onClick={() => setAutoRefresh((old) => !old)}>
-            {autoRefresh ? "Pause Auto Refresh" : "Resume Auto Refresh"}
-          </button>
-          <button className="primary" disabled={busy} onClick={() => void refreshAll()}>
-            Refresh Workspace
-          </button>
-        </div>
-      </header>
+      <a href="#main" className="sr-only">
+        Skip to content
+      </a>
 
-      <nav className="tabBar card">
-        <button className={activeTab === "launch" ? "tab selected" : "tab"} onClick={() => setActiveTab("launch")}>
-          Launchpad
-        </button>
-        <button className={activeTab === "project" ? "tab selected" : "tab"} onClick={() => setActiveTab("project")}>
-          Project
-        </button>
-        <button className={activeTab === "jobs" ? "tab selected" : "tab"} onClick={() => setActiveTab("jobs")}>
-          Jobs
-        </button>
-        <button className={activeTab === "timeline" ? "tab selected" : "tab"} onClick={() => setActiveTab("timeline")}>
-          Timeline
-        </button>
-        <button className={activeTab === "system" ? "tab selected" : "tab"} onClick={() => setActiveTab("system")}>
-          System
-        </button>
-        <button className={activeTab === "music" ? "tab selected" : "tab"} onClick={() => setActiveTab("music")}>
-          Music Studio
-        </button>
-      </nav>
-
-      <section className="kpis">
-        <article className="kpi card">
-          <div className="kpiLabel">API Status</div>
-          <div className={`kpiValue ${apiOnline ? "success" : "error"}`}>{apiOnline ? "Online" : "Offline"}</div>
-          <div className="help">Base: {apiBase}</div>
-        </article>
-        <article className="kpi card">
-          <div className="kpiLabel">Cinematic Readiness</div>
-          <div className={`kpiValue ${dependencies?.ready_for_cinematic ? "success" : "error"}`}>
-            {dependencies?.ready_for_cinematic ? "Ready" : "Blocked"}
+      <aside className="sidebar" data-open={navOpen} aria-label="Primary">
+        <div className="brand">
+          <div className="brand__mark" aria-hidden>
+            V
           </div>
-          <div className="help">Checkpoints: {doctor?.comfyui_checkpoints.checkpoint_count ?? 0}</div>
-        </article>
-        <article className="kpi card">
-          <div className="kpiLabel">Active Job</div>
-          <div className="kpiValue">{jobId ?? "-"}</div>
-          <div className="help">Project: {projectId ?? "-"}</div>
-        </article>
-      </section>
+          <div>
+            <div className="brand__name">VidCreatorIQ</div>
+            <div className="brand__tag">AI Film Studio</div>
+          </div>
+        </div>
 
-      {activeTab === "launch" && (
-        <section className="grid two">
-          <article className="card launchPanel">
-            <h3>Launch Page</h3>
-            <p className="subhead">Run a movie in minutes: configure system, create project, start generation, then monitor results.</p>
-            <div className="checklist">
-              <div className="checkItem">1. Verify API, FFmpeg, and ComfyUI readiness in System tab.</div>
-              <div className="checkItem">2. Create or paste your script in Project tab.</div>
-              <div className="checkItem">3. Start generation and monitor logs in Jobs tab.</div>
-              <div className="checkItem">4. Fine-tune scene order and duration in Timeline tab.</div>
-            </div>
-            <div className="row">
-              <button className="primary" onClick={() => setActiveTab("project")}>Open Project Workspace</button>
-              <button className="ghost" onClick={() => setActiveTab("system")}>Open System Doctor</button>
-            </div>
-          </article>
-          <article className="card launchPanel">
-            <h3>Readiness Snapshot</h3>
-            <div className="pillRow">
-              <span className={`pill ${apiOnline ? "ok" : "bad"}`}>API {apiOnline ? "Online" : "Offline"}</span>
-              <span className={`pill ${statusClass(Boolean(dependencies?.ready_for_generation))}`}>
-                Generation {dependencies?.ready_for_generation ? "Ready" : "Blocked"}
-              </span>
-              <span className={`pill ${statusClass(Boolean(dependencies?.ready_for_cinematic))}`}>
-                Cinematic {dependencies?.ready_for_cinematic ? "Ready" : "Blocked"}
-              </span>
-            </div>
-            <div className="launchStats">
-              <div><strong>Blocking issues:</strong> {blockingIssues}</div>
-              <div><strong>Checkpoint count:</strong> {doctor?.comfyui_checkpoints.checkpoint_count ?? 0}</div>
-              <div><strong>Current project:</strong> {projectId ?? "none"}</div>
-              <div><strong>Current job:</strong> {jobId ?? "none"}</div>
-            </div>
-            <div className="row">
-              <button className="primary" disabled={!canRunMovie || !projectId || busy} onClick={() => void runMovie()}>
-                Quick Start Movie Run
-              </button>
-            </div>
-          </article>
-          <article className="card fullSpan">
-            <h3>Recent Live Events</h3>
-            <div className="logBox">
-              {jobEvents.length === 0 && <div>No job events yet.</div>}
-              {jobEvents.slice(-12).map((event) => (
-                <div key={event.id}>
-                  [{event.created_at}] [{event.stage}] {event.message}
-                </div>
+        <nav>
+          {navGroups.map(([group, items]) => (
+            <div key={group}>
+              <div className="nav-section">{group}</div>
+              {items.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="nav-item"
+                  aria-current={view === item.id ? "page" : undefined}
+                  disabled={isLocked(item.id)}
+                  onClick={() => {
+                    setView(item.id);
+                    setNavOpen(false);
+                  }}
+                >
+                  <span className="nav-item__icon" aria-hidden>
+                    {item.icon}
+                  </span>
+                  {item.label}
+                  {item.id === "storyboard" && scenes.length > 0 && (
+                    <span className="nav-item__badge">{scenes.length}</span>
+                  )}
+                </button>
               ))}
             </div>
-          </article>
-        </section>
-      )}
+          ))}
+        </nav>
 
-      {activeTab === "project" && (
-        <section className="card">
-          <h3>Project Workspace</h3>
-          <label>Project title</label>
-          <input value={title} onChange={(event) => setTitle(event.target.value)} />
-
-          <label>Script</label>
-          <textarea
-            placeholder="Paste screenplay or narrative script here..."
-            value={scriptText}
-            onChange={(event) => setScriptText(event.target.value)}
-          />
-
-          <label>Visual mode</label>
-          <div className="modeToggle">
-            <button className={mode === "basic" ? "selected" : ""} type="button" onClick={() => setMode("basic")}>
-              Basic
-            </button>
-            <button className={mode === "cinematic" ? "selected" : ""} type="button" onClick={() => setMode("cinematic")}>
-              Cinematic
+        <div className="sidebar__footer">
+          <div className="col" style={{ gap: 12, padding: "0 12px" }}>
+            <Badge tone={deps?.ready_for_generation ? "success" : "warning"}>
+              <span className="dot" aria-hidden />
+              {deps?.ready_for_generation ? "Engine ready" : "Check dependencies"}
+            </Badge>
+            <button
+              type="button"
+              className="btn btn--sm btn--block"
+              onClick={() => setPaletteOpen(true)}
+            >
+              Search <span className="kbd">{"\u2318"}K</span>
             </button>
           </div>
+        </div>
+      </aside>
 
-          <div className="row">
-            <button className="primary" disabled={busy} onClick={() => void createProject()}>
-              Create Project
-            </button>
-            <button className="primary" disabled={!canRunMovie || busy} onClick={() => void runMovie()}>
-              Generate Movie
-            </button>
-          </div>
-        </section>
-      )}
+      <div className="main">
+        <header className="topbar">
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => setNavOpen((v) => !v)}
+            aria-label="Toggle navigation"
+            aria-expanded={navOpen}
+          >
+            {"\u2630"}
+          </button>
+          <span className="topbar__title">{current?.label}</span>
+          <div className="topbar__spacer" />
 
-      {activeTab === "jobs" && (
-        <section className="card">
-          <h3>Job Timeline</h3>
-          {job ? (
-            <>
-              <div className="help">
-                Status: <strong>{job.status}</strong> | Stage: <strong>{job.stage}</strong> | Scenes: {job.processed_scenes}/{job.total_scenes} | Attempts: {job.attempts}
-              </div>
-              <div className="progressWrap">
-                <div className="progressBar" style={{ width: `${progressPercent}%` }} />
-              </div>
-              <div className="help">{progressPercent}% - {job.message}</div>
-            </>
-          ) : (
-            <div className="help">No job selected yet.</div>
+          {job?.status === "processing" && (
+            <Badge tone="info" pulse>
+              Rendering {Math.round((job.progress ?? 0) * 100)}%
+            </Badge>
           )}
+          {project && <Badge tone="accent">{project.title}</Badge>}
 
-          <div className="row">
-            <div>
-              <label>Resume from scene index</label>
-              <input
-                type="number"
-                min={1}
-                value={resumeSceneIndex}
-                onChange={(event) => setResumeSceneIndex(Math.max(1, Number(event.target.value || 1)))}
+          <ThemeToggle theme={theme} setTheme={setTheme} />
+
+          <button type="button" className="btn btn--sm" onClick={handleNewProject}>
+            New
+          </button>
+          <button
+            type="button"
+            className="btn btn--primary btn--sm"
+            onClick={handleGenerate}
+            disabled={busy}
+          >
+            {busy ? "Rendering..." : "Generate Movie"}
+          </button>
+        </header>
+
+        <main className="content" id="main">
+          <div className="content__inner" key={view}>
+            {error && view !== "render" && (
+              <Alert tone="danger" title="Something went wrong">
+                <pre>{error}</pre>
+              </Alert>
+            )}
+
+            {view === "studio" && (
+              <StudioView
+                title={title}
+                setTitle={setTitle}
+                script={script}
+                setScript={setScript}
+                language={language}
+                setLanguage={setLanguage}
+                visualMode={visualMode}
+                setVisualMode={setVisualMode}
+                wordCount={wordCount}
+                estimatedRuntime={estimatedRuntime}
+                busy={busy}
+                onGenerate={handleGenerate}
+                onLoadSample={() => {
+                  setTitle("The Lighthouse");
+                  setScript(SAMPLE_SCRIPT);
+                }}
               />
-            </div>
-            <div className="alignBottom">
-              <button className="ghost" disabled={!jobId || busy} onClick={() => void resumeJob()}>
-                Resume Job
+            )}
+
+            {view === "storyboard" && (
+              <StoryboardView
+                scenes={scenes}
+                artifacts={artifacts}
+                projects={projects}
+                activeProjectId={project?.id ?? null}
+                onOpenProject={openProject}
+                onGoToStudio={() => setView("studio")}
+              />
+            )}
+
+            {view === "voice" && (
+              <VoiceView
+                providers={providers}
+                provider={provider}
+                setProvider={setProvider}
+                voices={voices}
+                voice={voice}
+                setVoice={setVoice}
+                previewUrl={previewUrl}
+                previewBusy={previewBusy}
+                onPreview={handlePreviewVoice}
+              />
+            )}
+
+            {view === "render" && (
+              <RenderView job={job} events={events} stageIndex={stageIndex} error={error} />
+            )}
+
+            {view === "preview" && (
+              <PreviewView artifacts={artifacts} onGoToStoryboard={() => setView("storyboard")} />
+            )}
+
+            {view === "music" && <MusicStudio apiBase={BASE_URL} />}
+
+            {view === "system" && (
+              <SystemView deps={deps} providers={providers} onRefresh={refreshDeps} />
+            )}
+          </div>
+        </main>
+      </div>
+
+      {paletteOpen && (
+        <CommandPalette
+          onClose={() => setPaletteOpen(false)}
+          onSelect={(id) => {
+            setView(id);
+            setPaletteOpen(false);
+          }}
+          isLocked={isLocked}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/* Chrome                                                                     */
+/* ========================================================================== */
+
+function ThemeToggle({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void }) {
+  return (
+    <div className="theme-toggle" role="group" aria-label="Colour theme">
+      <button
+        type="button"
+        className="theme-toggle__btn"
+        aria-pressed={theme === "light"}
+        aria-label="Light theme"
+        title="Light theme"
+        onClick={() => setTheme("light")}
+      >
+        {"\u2600"}
+      </button>
+      <button
+        type="button"
+        className="theme-toggle__btn"
+        aria-pressed={theme === "dark"}
+        aria-label="Dark theme"
+        title="Dark theme"
+        onClick={() => setTheme("dark")}
+      >
+        {"\u263E"}
+      </button>
+    </div>
+  );
+}
+
+function CommandPalette({
+  onClose,
+  onSelect,
+  isLocked,
+}: {
+  onClose: () => void;
+  onSelect: (view: View) => void;
+  isLocked: (view: View) => boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const results = useMemo(
+    () =>
+      NAV.filter((item) => !isLocked(item.id)).filter((item) =>
+        item.label.toLowerCase().includes(query.trim().toLowerCase()),
+      ),
+    [query, isLocked],
+  );
+
+  useEffect(() => setActive(0), [query]);
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive((i) => (i + 1) % Math.max(1, results.length));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive((i) => (i - 1 + results.length) % Math.max(1, results.length));
+    } else if (e.key === "Enter" && results[active]) {
+      onSelect(results[active].id);
+    }
+  };
+
+  return (
+    <div
+      className="palette-backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+        <input
+          ref={inputRef}
+          className="palette__input"
+          placeholder="Jump to..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onKeyDown}
+          aria-label="Search commands"
+        />
+        <div className="palette__list">
+          {results.map((item, i) => (
+            <button
+              key={item.id}
+              type="button"
+              className="palette__item"
+              data-active={i === active}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => onSelect(item.id)}
+            >
+              <span aria-hidden>{item.icon}</span>
+              {item.label}
+              <span className="palette__hint">{item.group}</span>
+            </button>
+          ))}
+          {results.length === 0 && <div className="palette__item dim">No matches</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ========================================================================== */
+/* Views                                                                      */
+/* ========================================================================== */
+
+function StudioView(props: {
+  title: string;
+  setTitle: (v: string) => void;
+  script: string;
+  setScript: (v: string) => void;
+  language: string;
+  setLanguage: (v: string) => void;
+  visualMode: "basic" | "cinematic";
+  setVisualMode: (v: "basic" | "cinematic") => void;
+  wordCount: number;
+  estimatedRuntime: number;
+  busy: boolean;
+  onGenerate: () => void;
+  onLoadSample: () => void;
+}) {
+  return (
+    <>
+      <section className="hero">
+        <div className="hero__content">
+          <span className="hero__eyebrow">
+            <span className="dot" aria-hidden />
+            Script to screen
+          </span>
+          <h1 className="hero__title">
+            Turn any script into a <em>finished film</em>.
+          </h1>
+          <p className="hero__text">
+            We break your writing into scenes, voice it with neural narration, illustrate every beat,
+            and master a broadcast-ready 1080p MP4 with captions and mixed audio.
+          </p>
+          <div className="hero__actions">
+            <button
+              type="button"
+              className="btn btn--primary btn--lg"
+              onClick={props.onGenerate}
+              disabled={props.busy}
+            >
+              {props.busy ? "Rendering..." : "Generate Movie"}
+            </button>
+            <button type="button" className="btn btn--lg" onClick={props.onLoadSample}>
+              Load sample script
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid grid--4">
+        <Stat label="Words" value={props.wordCount} />
+        <Stat label="Est. runtime" value={formatDuration(props.estimatedRuntime)} hint="at 150 wpm" />
+        <Stat label="Output" value="1080p" hint="H.264 / AAC 192k" />
+        <Stat label="Mode" value={props.visualMode === "basic" ? "Fast" : "Cinematic"} />
+      </div>
+
+      <div className="grid grid--2" style={{ alignItems: "start" }}>
+        <Card title="Screenplay" description="Blank lines separate scenes.">
+          <div className="col">
+            <Field label="Project title" htmlFor="title">
+              <input
+                id="title"
+                className="input"
+                value={props.title}
+                onChange={(e) => props.setTitle(e.target.value)}
+                placeholder="Untitled Project"
+              />
+            </Field>
+            <Field label="Script" htmlFor="script" hint={`${props.wordCount} words`}>
+              <textarea
+                id="script"
+                className="textarea textarea--mono"
+                value={props.script}
+                onChange={(e) => props.setScript(e.target.value)}
+                placeholder="Open on a quiet street at dawn..."
+              />
+            </Field>
+          </div>
+        </Card>
+
+        <div className="col">
+          <Card title="Render settings">
+            <div className="col">
+              <Field label="Visual mode">
+                <Segmented
+                  label="Visual mode"
+                  value={props.visualMode}
+                  onChange={props.setVisualMode}
+                  options={[
+                    { value: "basic", label: "Fast" },
+                    { value: "cinematic", label: "Cinematic" },
+                  ]}
+                />
+                <span className="hint">
+                  {props.visualMode === "basic"
+                    ? "Designed art cards with Ken Burns motion. Renders in seconds."
+                    : "Diffusion-generated frames via ComfyUI. Much slower, needs models installed."}
+                </span>
+              </Field>
+
+              <Field label="Language" htmlFor="lang">
+                <select
+                  id="lang"
+                  className="select"
+                  value={props.language}
+                  onChange={(e) => props.setLanguage(e.target.value)}
+                >
+                  <option value="en">English</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="hi">Hindi</option>
+                </select>
+              </Field>
+
+              <button
+                type="button"
+                className="btn btn--primary btn--lg btn--block"
+                onClick={props.onGenerate}
+                disabled={props.busy}
+              >
+                {props.busy ? "Rendering..." : "Generate Movie"}
               </button>
             </div>
-          </div>
+          </Card>
 
-          <div className="logBox">
-            {jobEvents.length === 0 && <div>No events yet.</div>}
-            {jobEvents.slice(-30).map((event) => (
-              <div key={event.id}>
-                [{event.created_at}] [{event.stage}] {event.message}
+          <Card title="What you get">
+            <div>
+              <div className="kv">
+                <span className="kv__key">Video</span>
+                <span className="kv__value">1920x1080 H.264</span>
+              </div>
+              <div className="kv">
+                <span className="kv__key">Audio</span>
+                <span className="kv__value">AAC 192k, -16 LUFS</span>
+              </div>
+              <div className="kv">
+                <span className="kv__key">Narration</span>
+                <span className="kv__value">MP3 192k, 44.1 kHz</span>
+              </div>
+              <div className="kv">
+                <span className="kv__key">Captions</span>
+                <span className="kv__value">Burned-in + SRT/VTT</span>
+              </div>
+              <div className="kv">
+                <span className="kv__key">Per scene</span>
+                <span className="kv__value">Image, clip, audio</span>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function StoryboardView({
+  scenes,
+  artifacts,
+  projects,
+  activeProjectId,
+  onOpenProject,
+  onGoToStudio,
+}: {
+  scenes: ProjectOut["scenes"];
+  artifacts: JobArtifacts | null;
+  projects: ProjectOut[];
+  activeProjectId: number | null;
+  onOpenProject: (projectId: number) => void;
+  onGoToStudio: () => void;
+}) {
+  // While a render is in flight the project record may not have scenes yet, but
+  // the artifacts endpoint already does - prefer whichever is richer.
+  const rows = artifacts?.scenes?.length
+    ? artifacts.scenes.map((a) => ({
+        id: a.id,
+        scene_index: a.scene_index,
+        title: a.title,
+        text: a.script_chunk ?? "",
+        duration: a.duration_seconds,
+        image: a.image_url,
+        audio: a.narration_url,
+        provider: a.tts_provider,
+      }))
+    : scenes.map((s) => ({
+        id: s.id,
+        scene_index: s.scene_index,
+        title: s.title,
+        text: s.script_chunk,
+        duration: s.duration_seconds,
+        image: "",
+        audio: "",
+        provider: "",
+      }));
+
+  const totalDuration = rows.reduce((sum, r) => sum + (r.duration || 0), 0);
+
+  const library = projects.length > 0 && (
+    <Card
+      title="Project library"
+      description={`${projects.length} project${projects.length === 1 ? "" : "s"} - open one to view its storyboard.`}
+    >
+      <div className="track-list">
+        {projects.slice(0, 12).map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            className="project-row"
+            aria-pressed={activeProjectId === p.id}
+            onClick={() => onOpenProject(p.id)}
+          >
+            <span className="track__icon" aria-hidden>
+              {"\u25A6"}
+            </span>
+            <span className="project-row__body">
+              <span className="project-row__title truncate">{p.title}</span>
+              <span className="project-row__meta">
+                #{p.id} · {p.scenes.length} scenes · {new Date(p.created_at).toLocaleDateString()}
+              </span>
+            </span>
+            <Badge tone={p.status === "completed" ? "success" : "neutral"}>{p.status}</Badge>
+          </button>
+        ))}
+      </div>
+    </Card>
+  );
+
+  if (rows.length === 0) {
+    return (
+      <>
+        <div className="page-head">
+          <div className="page-head__text">
+            <h1 className="page-title">Storyboard</h1>
+            <p className="page-subtitle">
+              Every scene of your film, with its artwork, runtime and narration.
+            </p>
+          </div>
+        </div>
+
+        <EmptyState
+          icon={"\u25A6"}
+          title="No storyboard open"
+          text={
+            projects.length > 0
+              ? "Open a project below, or write a new script to generate a fresh storyboard."
+              : "Write a script in the Script Studio and every scene will appear here with its artwork, narration and clip."
+          }
+          action={
+            <button type="button" className="btn btn--primary" onClick={onGoToStudio}>
+              Go to Script Studio
+            </button>
+          }
+        />
+
+        {library}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="page-head">
+        <div className="page-head__text">
+          <h1 className="page-title">Storyboard</h1>
+          <p className="page-subtitle">
+            {rows.length} scenes, {formatDuration(totalDuration)} total runtime.
+          </p>
+        </div>
+      </div>
+
+      {totalDuration > 0 && (
+        <Card title="Timeline" description="Block width is proportional to scene length.">
+          <div className="timeline">
+            {rows.map((row) => (
+              <div
+                key={row.id}
+                className="timeline__block"
+                style={{ flexGrow: Math.max(0.01, row.duration || 0) }}
+                title={`Scene ${row.scene_index} - ${formatDuration(row.duration)}`}
+              >
+                {row.scene_index}
               </div>
             ))}
           </div>
-        </section>
+        </Card>
       )}
 
-      {activeTab === "timeline" && (
-        <section className="card">
-          <h3>Scene Timeline Editor</h3>
-          {!project && <div className="help">Create or load a project to edit scenes.</div>}
-          {project && timelineDraft.length === 0 && <div className="help">Scenes will appear after first generation run.</div>}
-          {project && timelineDraft.map((scene, index) => (
-            <div className="sceneRow" key={scene.scene_id}>
-              <div className="sceneTitle">{scene.title}</div>
-              <div className="help">Scene ID: {scene.scene_id}</div>
-              <div className="row">
-                <div>
-                  <label>Order</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={scene.scene_index}
-                    onChange={(event) => {
-                      const next = [...timelineDraft];
-                      next[index] = {
-                        ...next[index],
-                        scene_index: Math.max(1, Number(event.target.value || 1)),
-                      };
-                      setTimelineDraft(next);
-                    }}
-                  />
-                </div>
-                <div>
-                  <label>Duration (seconds)</label>
-                  <input
-                    type="number"
-                    min={0.1}
-                    step={0.1}
-                    value={scene.duration_seconds}
-                    onChange={(event) => {
-                      const next = [...timelineDraft];
-                      next[index] = {
-                        ...next[index],
-                        duration_seconds: Math.max(0.1, Number(event.target.value || 0.1)),
-                      };
-                      setTimelineDraft(next);
-                    }}
-                  />
-                </div>
-                <div className="alignBottom">
-                  <button className="ghost" disabled={busy} onClick={() => void regenerateScene(scene.scene_id)}>
-                    Regenerate Scene
-                  </button>
-                </div>
-              </div>
+      <div className="grid grid--3">
+        {rows.map((row) => (
+          <article className="scene-card" key={row.id}>
+            <div className="scene-card__media">
+              {row.image ? (
+                <img src={row.image} alt={`Scene ${row.scene_index}: ${row.title}`} loading="lazy" />
+              ) : (
+                <Skeleton height="100%" />
+              )}
+              <span className="scene-card__index">SCENE {row.scene_index}</span>
+              <span className="scene-card__duration">{formatDuration(row.duration)}</span>
             </div>
-          ))}
-          {project && timelineDraft.length > 0 && (
-            <div className="actionsRight">
-              <button className="primary" disabled={busy} onClick={() => void saveTimeline()}>
-                Save Timeline
+            <div className="scene-card__body">
+              <h3 className="scene-card__title">{row.title}</h3>
+              {row.text && <p className="scene-card__text">{row.text}</p>}
+              {row.provider && <span className="dim">Voiced by {row.provider}</span>}
+            </div>
+            {row.audio && (
+              <div className="scene-card__foot">
+                <audio controls preload="none" src={row.audio} style={{ width: "100%", height: 32 }} />
+              </div>
+            )}
+          </article>
+        ))}
+      </div>
+
+      {library}
+    </>
+  );
+}
+
+function VoiceView(props: {
+  providers: TTSProvidersResponse | null;
+  provider: string;
+  setProvider: (v: string) => void;
+  voices: TTSVoice[];
+  voice: string;
+  setVoice: (v: string) => void;
+  previewUrl: string;
+  previewBusy: boolean;
+  onPreview: () => void;
+}) {
+  return (
+    <>
+      <div className="page-head">
+        <div className="page-head__text">
+          <h1 className="page-title">Voice Studio</h1>
+          <p className="page-subtitle">
+            Choose the narration engine. Engines configured in <code className="mono">.env</code> are
+            selectable; the rest need an API key. Unavailable engines fall back automatically.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid--2" style={{ alignItems: "start" }}>
+        <Card title="Engine" description="Ordered by voice quality.">
+          <div className="col" style={{ gap: 8 }}>
+            {(props.providers?.providers ?? []).map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className="provider-row"
+                aria-pressed={props.provider === p.id}
+                disabled={!p.configured}
+                onClick={() => props.setProvider(p.id)}
+              >
+                <span className="provider-row__name">{p.name}</span>
+                {p.configured ? (
+                  <Badge tone="success">Ready</Badge>
+                ) : (
+                  <Badge tone="warning">{p.requires_key ? "Needs API key" : "Not installed"}</Badge>
+                )}
               </button>
-              <a className="downloadLink" href={`${apiBase}/projects/${project.id}/download`} target="_blank" rel="noreferrer">
-                Download Final MP4
-              </a>
+            ))}
+            {!props.providers && <Skeleton height={160} />}
+          </div>
+        </Card>
+
+        <Card
+          title="Voice"
+          description={props.voices.length ? `${props.voices.length} voices available.` : undefined}
+          actions={
+            <button
+              type="button"
+              className="btn btn--sm"
+              onClick={props.onPreview}
+              disabled={!props.provider || props.previewBusy}
+            >
+              {props.previewBusy ? "Synthesising..." : "Preview"}
+            </button>
+          }
+        >
+          {props.voices.length === 0 ? (
+            <EmptyState
+              icon={"\u25C9"}
+              title="No voice list"
+              text="This engine uses its configured default voice. Preview still works."
+            />
+          ) : (
+            <div className="voice-grid">
+              {props.voices.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  className="voice-chip"
+                  aria-pressed={props.voice === v.id}
+                  onClick={() => props.setVoice(v.id)}
+                >
+                  <span className="voice-chip__name">{v.name}</span>
+                  <span className="voice-chip__meta">
+                    {[v.locale, v.gender].filter(Boolean).join(" / ") || v.provider}
+                  </span>
+                </button>
+              ))}
             </div>
           )}
-        </section>
-      )}
 
-      {activeTab === "system" && (
-        <>
-          <section className="card">
-            <h3>Connection and Runtime</h3>
-            <div className="grid two">
-              <div>
-                <label>API Base URL</label>
-                <input value={apiBase} onChange={(event) => setApiBase(event.target.value)} />
-              </div>
-              <div>
-                <label>Refresh Interval (seconds)</label>
-                <input
-                  type="number"
-                  min={2}
-                  max={30}
-                  value={refreshSeconds}
-                  onChange={(event) => setRefreshSeconds(Math.max(2, Number(event.target.value || 4)))}
-                />
-              </div>
+          {props.previewUrl && (
+            <div className="audio-row" style={{ marginTop: 16 }}>
+              <span aria-hidden>{"\u266A"}</span>
+              <audio controls autoPlay src={props.previewUrl} />
             </div>
-          </section>
+          )}
+        </Card>
+      </div>
+    </>
+  );
+}
 
-          <section className="card">
-            <h3>Dependency Doctor</h3>
-            {dependencyError && <p className="error">{dependencyError}</p>}
-            {dependencies && (
-              <div className="pillRow">
-                <span className={`pill ${statusClass(dependencies.dependencies.ffmpeg.ready)}`}>
-                  ffmpeg: {dependencies.dependencies.ffmpeg.detail}
+function RenderView({
+  job,
+  events,
+  stageIndex,
+  error,
+}: {
+  job: JobOut | null;
+  events: JobEventOut[];
+  stageIndex: number;
+  error: string;
+}) {
+  const logRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Keep the newest line in view, the way a real build console behaves.
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
+  }, [events.length]);
+
+  if (!job) {
+    return (
+      <EmptyState
+        icon={"\u25B6"}
+        title="Nothing rendering"
+        text="Start a render from the Script Studio and live progress will stream here."
+      />
+    );
+  }
+
+  const tone = job.status === "failed" ? "danger" : job.status === "completed" ? "success" : "info";
+
+  return (
+    <>
+      <div className="page-head">
+        <div className="page-head__text">
+          <h1 className="page-title">Render Console</h1>
+          <p className="page-subtitle">{job.message}</p>
+        </div>
+        <Badge tone={tone} pulse={job.status === "processing"}>
+          {job.status}
+        </Badge>
+      </div>
+
+      <Card>
+        <div className="col">
+          <div className="row">
+            <strong className="nums" style={{ fontSize: "var(--text-xl)" }}>
+              {Math.round((job.progress ?? 0) * 100)}%
+            </strong>
+            <div className="spacer" />
+            <span className="dim nums">
+              Scene {job.processed_scenes} / {job.total_scenes || "-"}
+            </span>
+          </div>
+          <Progress value={job.progress ?? 0} label="Render progress" />
+        </div>
+      </Card>
+
+      <div className="grid grid--2" style={{ alignItems: "start" }}>
+        <Card title="Pipeline">
+          <div className="stepper">
+            {RENDER_STAGES.map((stage, i) => (
+              <div
+                key={stage.id}
+                className="step"
+                data-state={
+                  job.status === "completed" || i < stageIndex
+                    ? "done"
+                    : i === stageIndex
+                      ? "active"
+                      : "idle"
+                }
+              >
+                <span className="step__marker">
+                  {job.status === "completed" || i < stageIndex ? "\u2713" : i + 1}
                 </span>
-                <span className={`pill ${statusClass(dependencies.dependencies.comfyui.ready)}`}>
-                  comfyui: {dependencies.dependencies.comfyui.detail}
-                </span>
-                <span className={`pill ${statusClass(dependencies.dependencies.piper.ready)}`}>
-                  piper: {dependencies.dependencies.piper.detail}
-                </span>
+                <span className="step__label">{stage.label}</span>
               </div>
-            )}
-            {doctor?.comfyui_checkpoints && (
-              <div className="help">
-                Checkpoint endpoint: {doctor.comfyui_checkpoints.endpoint || "not configured"}
-                <br />
-                Checkpoint count: {doctor.comfyui_checkpoints.checkpoint_count} | Samples: {doctor.comfyui_checkpoints.sample_checkpoint_names.join(", ") || "(none)"}
+            ))}
+          </div>
+        </Card>
+
+        <Card title="Activity log">
+          <div className="console" ref={logRef} role="log" aria-live="polite">
+            {events.map((event) => (
+              <div className="console__line" key={event.id} data-level={event.level}>
+                <span className="console__time">
+                  {new Date(event.created_at).toLocaleTimeString()}
+                </span>
+                <span className="console__stage">{event.stage}</span>
+                <span className="console__msg">{event.message}</span>
               </div>
-            )}
-          </section>
-        </>
+            ))}
+            {events.length === 0 && <span className="dim">Waiting for the first event...</span>}
+          </div>
+        </Card>
+      </div>
+
+      {error && (
+        <Alert tone="danger" title="Render failed">
+          <pre>{error}</pre>
+        </Alert>
       )}
+    </>
+  );
+}
 
-      {activeTab === "music" && <MusicStudio apiBase={apiBase} />}
+function PreviewView({
+  artifacts,
+  onGoToStoryboard,
+}: {
+  artifacts: JobArtifacts | null;
+  onGoToStoryboard: () => void;
+}) {
+  if (!artifacts?.video_url) {
+    return (
+      <EmptyState
+        icon={"\u25C8"}
+        title="No movie loaded"
+        text="Finish a render, or open a previously rendered project from the Storyboard library."
+        action={
+          <button type="button" className="btn btn--primary" onClick={onGoToStoryboard}>
+            Browse projects
+          </button>
+        }
+      />
+    );
+  }
 
-      {message && <div className="toast">{message}</div>}
-    </div>
+  const assets = [
+    { label: "Final movie (MP4)", url: artifacts.video_url },
+    { label: "Narration (MP3)", url: artifacts.audio_url },
+    { label: "Subtitles (SRT)", url: artifacts.subtitle_url },
+    { label: "Captions (VTT)", url: artifacts.captions_vtt_url },
+    { label: "Poster frame (JPG)", url: artifacts.poster_url },
+  ].filter((a) => a.url);
+
+  return (
+    <>
+      <div className="page-head">
+        <div className="page-head__text">
+          <h1 className="page-title">Preview &amp; Export</h1>
+          <p className="page-subtitle">
+            {formatDuration(artifacts.duration_seconds)}, {artifacts.scenes.length} scenes, 1080p H.264
+          </p>
+        </div>
+        <a className="btn btn--primary" href={artifacts.video_url} download>
+          Download MP4
+        </a>
+      </div>
+
+      <div className="player">
+        <video
+          controls
+          playsInline
+          poster={artifacts.poster_url || undefined}
+          src={artifacts.video_url}
+        >
+          {artifacts.captions_vtt_url && (
+            <track
+              kind="captions"
+              srcLang="en"
+              label="English"
+              src={artifacts.captions_vtt_url}
+              default
+            />
+          )}
+        </video>
+      </div>
+
+      <div className="grid grid--2">
+        <Card title="Narration audio" description="Mastered MP3, 192 kbps, 44.1 kHz.">
+          <div className="audio-row">
+            <span aria-hidden>{"\u266A"}</span>
+            <audio controls src={artifacts.audio_url} />
+          </div>
+          <a className="btn btn--sm" href={artifacts.audio_url} download style={{ marginTop: 12 }}>
+            Download MP3
+          </a>
+        </Card>
+
+        <Card title="Assets">
+          <div>
+            {assets.map((asset) => (
+              <div className="kv" key={asset.label}>
+                <span className="kv__key">{asset.label}</span>
+                <a className="btn btn--sm" href={asset.url} download style={{ marginLeft: "auto" }}>
+                  Download
+                </a>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      <Card title="Scenes">
+        <div className="grid grid--3">
+          {artifacts.scenes.map((scene) => (
+            <article className="scene-card" key={scene.id}>
+              <div className="scene-card__media">
+                {scene.image_url && <img src={scene.image_url} alt={scene.title} loading="lazy" />}
+                <span className="scene-card__index">SCENE {scene.scene_index}</span>
+                <span className="scene-card__duration">
+                  {formatDuration(scene.duration_seconds)}
+                </span>
+              </div>
+              <div className="scene-card__body">
+                <h3 className="scene-card__title">{scene.title}</h3>
+                {scene.tts_provider && <span className="dim">Voiced by {scene.tts_provider}</span>}
+              </div>
+              {scene.narration_url && (
+                <div className="scene-card__foot">
+                  <audio
+                    controls
+                    preload="none"
+                    src={scene.narration_url}
+                    style={{ width: "100%", height: 32 }}
+                  />
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+      </Card>
+    </>
+  );
+}
+
+function SystemView({
+  deps,
+  providers,
+  onRefresh,
+}: {
+  deps: DependenciesResponse | null;
+  providers: TTSProvidersResponse | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <>
+      <div className="page-head">
+        <div className="page-head__text">
+          <h1 className="page-title">System Health</h1>
+          <p className="page-subtitle">
+            Everything the render pipeline depends on. Configure these in{" "}
+            <code className="mono">.env</code>.
+          </p>
+        </div>
+        <button type="button" className="btn" onClick={onRefresh}>
+          Re-check
+        </button>
+      </div>
+
+      <div className="grid grid--3">
+        {deps
+          ? Object.entries(deps.dependencies).map(([name, info]) => (
+              <Card key={name}>
+                <div className="row">
+                  <strong style={{ textTransform: "capitalize" }}>{name}</strong>
+                  <div className="spacer" />
+                  <Badge tone={info.ready ? "success" : "warning"}>
+                    {info.ready ? "Ready" : "Check"}
+                  </Badge>
+                </div>
+                <p className="dim" style={{ marginTop: 8 }}>
+                  {info.detail}
+                </p>
+                {info.resolved_path && (
+                  <p className="mono dim truncate" style={{ marginTop: 4, fontSize: 12 }}>
+                    {info.resolved_path}
+                  </p>
+                )}
+              </Card>
+            ))
+          : [0, 1, 2].map((i) => <Skeleton key={i} height={120} />)}
+      </div>
+
+      <Card title="Narration engines" description="Configured via .env - no code changes needed.">
+        <div>
+          {(providers?.providers ?? []).map((p) => (
+            <div className="kv" key={p.id}>
+              <span className="kv__key">{p.name}</span>
+              <span style={{ marginLeft: "auto" }}>
+                <Badge tone={p.configured ? "success" : "neutral"}>
+                  {p.configured ? "Configured" : p.requires_key ? "Needs API key" : "Not installed"}
+                </Badge>
+              </span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card title="Output profile">
+        <div>
+          <div className="kv">
+            <span className="kv__key">Resolution</span>
+            <span className="kv__value">1920 x 1080 @ 30 fps</span>
+          </div>
+          <div className="kv">
+            <span className="kv__key">Video codec</span>
+            <span className="kv__value">H.264, CRF 20, faststart</span>
+          </div>
+          <div className="kv">
+            <span className="kv__key">Audio codec</span>
+            <span className="kv__value">AAC 192 kbps, 44.1 kHz</span>
+          </div>
+          <div className="kv">
+            <span className="kv__key">Loudness</span>
+            <span className="kv__value">-16 LUFS, -1.5 dBTP</span>
+          </div>
+        </div>
+      </Card>
+    </>
+  );
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <Shell />
+    </ToastProvider>
   );
 }
 

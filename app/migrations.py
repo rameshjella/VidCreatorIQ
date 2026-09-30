@@ -61,6 +61,14 @@ def run_startup_migrations(engine: Engine) -> None:
             "ALTER TABLE music_generations ADD COLUMN retry_of_generation_id INTEGER NULL",
             "ALTER TABLE music_generations ADD COLUMN queue_job_id VARCHAR(128) DEFAULT ''",
             "ALTER TABLE music_generations ADD COLUMN cancel_requested INTEGER DEFAULT 0",
+            # Render pipeline v2: measured narration timing + richer artifacts.
+            "ALTER TABLE scenes ADD COLUMN audio_duration_seconds FLOAT DEFAULT 0.0",
+            "ALTER TABLE scenes ADD COLUMN tts_provider VARCHAR(64) DEFAULT ''",
+            "ALTER TABLE scenes ADD COLUMN tts_voice VARCHAR(128) DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN output_audio_path VARCHAR(512) DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN output_subtitle_path VARCHAR(512) DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN output_poster_path VARCHAR(512) DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN output_duration_seconds FLOAT DEFAULT 0.0",
         ]:
             try:
                 conn.execute(text(ddl))

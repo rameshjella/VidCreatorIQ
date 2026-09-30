@@ -36,6 +36,11 @@ class Scene(Base):
     narration_path: Mapped[str] = mapped_column(String(512), default="")
     subtitle_path: Mapped[str] = mapped_column(String(512), default="")
     duration_seconds: Mapped[float] = mapped_column(Float, default=6.0)
+    # Measured from the rendered narration, not estimated by the LLM. This is
+    # the value the video stage uses so audio and picture stay in sync.
+    audio_duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    tts_provider: Mapped[str] = mapped_column(String(64), default="")
+    tts_voice: Mapped[str] = mapped_column(String(128), default="")
 
     project: Mapped["Project"] = relationship(back_populates="scenes")
 
@@ -55,6 +60,10 @@ class Job(Base):
     queue_job_id: Mapped[str] = mapped_column(String(128), default="")
     last_error: Mapped[str] = mapped_column(Text, default="")
     output_video_path: Mapped[str] = mapped_column(String(512), default="")
+    output_audio_path: Mapped[str] = mapped_column(String(512), default="")
+    output_subtitle_path: Mapped[str] = mapped_column(String(512), default="")
+    output_poster_path: Mapped[str] = mapped_column(String(512), default="")
+    output_duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

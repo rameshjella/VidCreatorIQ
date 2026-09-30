@@ -160,3 +160,66 @@ export type MusicGenerationOut = {
   generation_label: string | null;
 };
 
+// --- Voice Studio -----------------------------------------------------------
+export interface TTSProvider {
+  id: string;
+  name: string;
+  configured: boolean;
+  quality_rank: number;
+  requires_key: boolean;
+}
+
+export interface TTSProvidersResponse {
+  providers: TTSProvider[];
+  active: string;
+  fallback_chain: string[];
+  defaults: {
+    speaking_rate: number;
+    pitch: number;
+    mp3_bitrate: string;
+    sample_rate: number;
+  };
+}
+
+export interface TTSVoice {
+  id: string;
+  name: string;
+  locale: string;
+  gender: string;
+  provider: string;
+  preview_url: string;
+}
+
+export interface TTSVoicesResponse {
+  provider: string;
+  voices: TTSVoice[];
+}
+
+// --- Render artifacts -------------------------------------------------------
+export interface SceneArtifact {
+  id: number;
+  scene_index: number;
+  title: string;
+  script_chunk?: string;
+  duration_seconds: number;
+  tts_provider: string;
+  tts_voice: string;
+  image_url: string;
+  video_url: string;
+  narration_url: string;
+  subtitle_url: string;
+}
+
+export interface JobArtifacts {
+  job_id: number;
+  project_id: number;
+  status: string;
+  progress: number;
+  video_url: string;
+  audio_url: string;
+  subtitle_url: string;
+  captions_vtt_url: string;
+  poster_url: string;
+  duration_seconds: number;
+  scenes: SceneArtifact[];
+}

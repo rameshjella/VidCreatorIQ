@@ -2,6 +2,7 @@ import type {
   DependenciesResponse,
   DependencyDoctorResponse,
   HealthResponse,
+  JobArtifacts,
   JobEventOut,
   JobOut,
   MusicEngineHealth,
@@ -11,6 +12,8 @@ import type {
   MovieRunResponse,
   ProjectOut,
   SceneOut,
+  TTSProvidersResponse,
+  TTSVoicesResponse,
 } from "./types";
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -33,6 +36,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
+  listProjects: (baseUrl: string) => requestJson<ProjectOut[]>(`${baseUrl}/projects`),
   getProject: (baseUrl: string, projectId: number) => requestJson<ProjectOut>(`${baseUrl}/projects/${projectId}`),
   runProject: (baseUrl: string, projectId: number, visualMode: "basic" | "cinematic") =>
     requestJson<MovieRunResponse>(`${baseUrl}/projects/${projectId}/run`, {
@@ -64,6 +68,31 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scene_id: sceneId }),
     }),
+
+  // --- Voice Studio -------------------------------------------------------
+  ttsProviders: (baseUrl: string) => requestJson<TTSProvidersResponse>(`${baseUrl}/tts/providers`),
+  ttsVoices: (baseUrl: string, provider: string) =>
+    requestJson<TTSVoicesResponse>(`${baseUrl}/tts/voices?provider=${encodeURIComponent(provider)}`),
+  ttsPreviewUrl: async (
+    baseUrl: string,
+    payload: { text: string; provider: string | null; voice: string },
+  ): Promise<string> => {
+    const response = await fetch(`${baseUrl}/tts/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error((await response.text()) || "Voice preview failed");
+    // Blob URL lets the <audio> element play the MP3 without a second round-trip.
+    return URL.createObjectURL(await response.blob());
+  },
+
+  // --- Render artifacts ---------------------------------------------------
+  jobArtifacts: (baseUrl: string, jobId: number) =>
+    requestJson<JobArtifacts>(`${baseUrl}/jobs/${jobId}/artifacts`),
+  projectArtifacts: (baseUrl: string, projectId: number) =>
+    requestJson<JobArtifacts>(`${baseUrl}/projects/${projectId}/artifacts`),
+
   musicHealth: (baseUrl: string) => requestJson<MusicEngineHealth>(`${baseUrl}/music/health`),
   musicWarmup: (baseUrl: string) => requestJson(`${baseUrl}/music/warmup`, { method: "POST" }),
   musicModels: (baseUrl: string) => requestJson<MusicModelsResponse>(`${baseUrl}/music/models`),
@@ -117,4 +146,3 @@ export const api = {
   getMusicWaveform: (baseUrl: string, generationId: number, points = 140) =>
     requestJson<MusicWaveformOut>(`${baseUrl}/music/generations/${generationId}/waveform?points=${points}`),
 };
-

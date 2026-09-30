@@ -1,0 +1,187 @@
+/* ==========================================================================
+   VidCreatorIQ — Design Tokens
+   Light-first. Dark is an opt-in override via [data-theme="dark"].
+   Every colour, space, radius, shadow and motion value in the product is
+   defined here exactly once.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* --- Surfaces (elevation rises toward pure white) --- */
+  --bg-base: #f6f7f9;
+  --bg-canvas: #ffffff;
+  --surface-1: #ffffff;
+  --surface-2: #f7f8fa;
+  --surface-3: #eef0f4;
+  --surface-hover: #e7eaf0;
+  --surface-translucent: rgba(255, 255, 255, 0.82);
+  --overlay-scrim: rgba(16, 19, 26, 0.76);
+
+  /* --- Borders --- */
+  --border-subtle: #eaecf0;
+  --border-default: #dcdfe6;
+  --border-strong: #c4c9d4;
+
+  /* --- Text (all AA+ on --bg-canvas) --- */
+  --text-primary: #101319;
+  --text-secondary: #4d535f;
+  --text-tertiary: #737a88;
+  --text-disabled: #a6acb8;
+  --text-inverse: #ffffff;
+
+  /* --- Brand --- */
+  --accent: #5b3df5;
+  --accent-hover: #6d52ff;
+  --accent-press: #4b2fdb;
+  --accent-subtle: rgba(91, 61, 245, 0.08);
+  --accent-border: rgba(91, 61, 245, 0.28);
+  --accent-2: #0091b8;
+  --gradient-brand: linear-gradient(135deg, #5b3df5 0%, #00a6d6 100%);
+  --gradient-surface: linear-gradient(180deg, rgba(91, 61, 245, 0.05) 0%, transparent 55%);
+  --gradient-hero: radial-gradient(1200px 400px at 12% -8%, rgba(91, 61, 245, 0.1), transparent 60%),
+    radial-gradient(900px 360px at 92% -12%, rgba(0, 166, 214, 0.1), transparent 60%);
+
+  /* --- Status --- */
+  --success: #0f8f4d;
+  --success-subtle: rgba(15, 143, 77, 0.1);
+  --warning: #b26a00;
+  --warning-subtle: rgba(178, 106, 0, 0.1);
+  --danger: #d32029;
+  --danger-subtle: rgba(211, 32, 41, 0.09);
+  --info: #0068a8;
+  --info-subtle: rgba(0, 104, 168, 0.1);
+
+  /* --- Spacing (4px base) --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* --- Typography --- */
+  --font-sans: "Inter", "Segoe UI Variable", "Segoe UI", -apple-system,
+    BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 32px;
+  --text-3xl: 44px;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.7;
+
+  /* --- Radii --- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 999px;
+
+  /* --- Elevation (soft, neutral-tinted for light surfaces) --- */
+  --shadow-1: 0 1px 2px rgba(16, 19, 26, 0.06), 0 1px 3px rgba(16, 19, 26, 0.04);
+  --shadow-2: 0 4px 12px rgba(16, 19, 26, 0.08), 0 2px 4px rgba(16, 19, 26, 0.04);
+  --shadow-3: 0 16px 40px rgba(16, 19, 26, 0.14), 0 4px 12px rgba(16, 19, 26, 0.06);
+  --shadow-glow: 0 0 0 1px var(--accent-border), 0 8px 24px rgba(91, 61, 245, 0.2);
+  --shadow-accent: 0 4px 14px rgba(91, 61, 245, 0.28);
+
+  /* --- Motion --- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --duration-fast: 150ms;
+  --duration-base: 250ms;
+  --duration-slow: 400ms;
+
+  /* --- Layout --- */
+  --sidebar-width: 256px;
+  --topbar-height: 60px;
+  --content-max: 1320px;
+  --focus-ring: 0 0 0 2px var(--bg-canvas), 0 0 0 4px var(--accent);
+}
+
+/* ==========================================================================
+   Dark theme — opt-in
+   ========================================================================== */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-base: #08080a;
+  --bg-canvas: #0d0d11;
+  --surface-1: #141418;
+  --surface-2: #1b1b21;
+  --surface-3: #23232b;
+  --surface-hover: #2a2a33;
+  --surface-translucent: rgba(13, 13, 17, 0.78);
+  --overlay-scrim: rgba(0, 0, 0, 0.8);
+
+  --border-subtle: #1f1f26;
+  --border-default: #2a2a33;
+  --border-strong: #3a3a45;
+
+  --text-primary: #f5f6f8;
+  --text-secondary: #a8abb4;
+  --text-tertiary: #82858f;
+  --text-disabled: #55585f;
+  --text-inverse: #0a0a0b;
+
+  --accent: #8b6dff;
+  --accent-hover: #9c83ff;
+  --accent-press: #7a58f5;
+  --accent-subtle: rgba(139, 109, 255, 0.16);
+  --accent-border: rgba(139, 109, 255, 0.38);
+  --accent-2: #3ddcff;
+  --gradient-brand: linear-gradient(135deg, #7c5cff 0%, #00d4ff 100%);
+  --gradient-surface: linear-gradient(180deg, rgba(124, 92, 255, 0.08) 0%, transparent 60%);
+  --gradient-hero: radial-gradient(1200px 400px at 12% -8%, rgba(124, 92, 255, 0.16), transparent 60%),
+    radial-gradient(900px 360px at 92% -12%, rgba(0, 212, 255, 0.12), transparent 60%);
+
+  --success: #3ddc84;
+  --success-subtle: rgba(61, 220, 132, 0.14);
+  --warning: #ffb547;
+  --warning-subtle: rgba(255, 181, 71, 0.14);
+  --danger: #ff6b6d;
+  --danger-subtle: rgba(255, 107, 109, 0.14);
+  --info: #3ddcff;
+  --info-subtle: rgba(61, 220, 255, 0.14);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 0 1px var(--accent-border), 0 8px 32px rgba(124, 92, 255, 0.28);
+  --shadow-accent: 0 4px 16px rgba(124, 92, 255, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 1ms;
+    --duration-base: 1ms;
+    --duration-slow: 1ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
