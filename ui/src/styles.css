@@ -1175,3 +1175,92 @@ a { color: var(--accent); text-decoration: none; }
 .project-row__body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .project-row__title { font-weight: var(--weight-semibold); }
 .project-row__meta { font-size: var(--text-sm); color: var(--text-tertiary); }
+
+/* --- Dependency cards ----------------------------------------------------- */
+.dep-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /* Equal height across the row regardless of message length. */
+  height: 100%;
+  min-width: 0;
+  padding: var(--space-5);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.dep-card[data-state="ready"]    { border-left-color: var(--success); }
+.dep-card[data-state="optional"] { border-left-color: var(--border-strong); }
+.dep-card[data-state="error"]    { border-left-color: var(--danger); }
+
+.dep-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.dep-card__name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dep-card__tag {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.dep-card__head .badge { margin-left: auto; }
+
+.dep-card__detail {
+  font-size: var(--text-base);
+  color: var(--text-primary);
+  /* Long URLs and Windows paths must wrap, not widen the grid track. */
+  overflow-wrap: anywhere;
+}
+
+.dep-card__hint {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.dep-card__path {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;      /* keep the filename visible when truncating a path */
+  text-align: left;
+}
+
+.dep-card__raw { margin-top: auto; }
+
+.dep-card__trace {
+  max-height: 140px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

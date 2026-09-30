@@ -19,6 +19,7 @@ import {
 } from "./components/ui";
 import type {
   DependenciesResponse,
+  DependencyInfo,
   JobArtifacts,
   JobEventOut,
   JobOut,
@@ -1255,6 +1256,52 @@ function PreviewView({
   );
 }
 
+/** One dependency widget. Fixed structure so every card lines up. */
+function DependencyCard({ name, info }: { name: string; info: DependencyInfo }) {
+  const label = info.label ?? name;
+
+  // Three states, not two. An unconfigured optional dependency is normal and
+  // should not wear the same warning colour as a broken required one.
+  const state = info.ready ? "ready" : info.optional ? "optional" : "error";
+  const tone = state === "ready" ? "success" : state === "optional" ? "neutral" : "danger";
+  const statusText = state === "ready" ? "Ready" : state === "optional" ? "Inactive" : "Action needed";
+
+  return (
+    <article className="dep-card" data-state={state}>
+      <header className="dep-card__head">
+        <span className="dep-card__name">{label}</span>
+        {info.optional && !info.ready && <span className="dep-card__tag">Optional</span>}
+        <Badge tone={tone}>{statusText}</Badge>
+      </header>
+
+      <p className="dep-card__detail">{info.detail}</p>
+
+      {info.hint && <p className="dep-card__hint">{info.hint}</p>}
+
+      {info.resolved_path && (
+        <p className="dep-card__path mono" title={info.resolved_path}>
+          {info.resolved_path}
+        </p>
+      )}
+
+      {typeof info.checkpoint_count === "number" && info.ready && (
+        <p className="dep-card__hint">
+          {info.checkpoint_count} checkpoint{info.checkpoint_count === 1 ? "" : "s"} available
+        </p>
+      )}
+
+      {info.raw_error && (
+        <details className="details dep-card__raw">
+          <summary className="details__summary">Technical detail</summary>
+          <div className="details__body">
+            <pre className="dep-card__trace">{info.raw_error}</pre>
+          </div>
+        </details>
+      )}
+    </article>
+  );
+}
+
 function SystemView({
   deps,
   providers,
@@ -1264,6 +1311,10 @@ function SystemView({
   providers: TTSProvidersResponse | null;
   onRefresh: () => void;
 }) {
+  const blocking = deps
+    ? Object.values(deps.dependencies).filter((d) => !d.ready && !d.optional).length
+    : 0;
+
   return (
     <>
       <div className="page-head">
@@ -1279,28 +1330,22 @@ function SystemView({
         </button>
       </div>
 
+      {deps && (
+        <Alert tone={blocking > 0 ? "danger" : "success"}>
+          {blocking > 0
+            ? `${blocking} required dependency needs attention before you can render.`
+            : deps.ready_for_cinematic
+              ? "All systems ready, including Cinematic mode."
+              : "Ready to render. Cinematic mode is unavailable until ComfyUI is running."}
+        </Alert>
+      )}
+
       <div className="grid grid--3">
         {deps
           ? Object.entries(deps.dependencies).map(([name, info]) => (
-              <Card key={name}>
-                <div className="row">
-                  <strong style={{ textTransform: "capitalize" }}>{name}</strong>
-                  <div className="spacer" />
-                  <Badge tone={info.ready ? "success" : "warning"}>
-                    {info.ready ? "Ready" : "Check"}
-                  </Badge>
-                </div>
-                <p className="dim" style={{ marginTop: 8 }}>
-                  {info.detail}
-                </p>
-                {info.resolved_path && (
-                  <p className="mono dim truncate" style={{ marginTop: 4, fontSize: 12 }}>
-                    {info.resolved_path}
-                  </p>
-                )}
-              </Card>
+              <DependencyCard key={name} name={name} info={info} />
             ))
-          : [0, 1, 2].map((i) => <Skeleton key={i} height={120} />)}
+          : [0, 1, 2].map((i) => <Skeleton key={i} height={170} />)}
       </div>
 
       <Card title="Narration engines" description="Configured via .env - no code changes needed.">
@@ -1315,6 +1360,7 @@ function SystemView({
               </span>
             </div>
           ))}
+          {!providers && <Skeleton height={180} />}
         </div>
       </Card>
 

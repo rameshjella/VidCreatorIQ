@@ -1,20 +1,18 @@
-"""CORS preflight regression test (in-process, no server required).
+"""CORS regression tests.
 
-Reproduces the production bug: the launcher serves the UI on port 8501, but
-``UI_ALLOWED_ORIGINS`` in .env only listed 5173. Because the configured value
-*replaced* the defaults, every preflight from 8501 returned 400 and the UI
-could not create projects.
+The launcher serves the UI on port 8501, but ``UI_ALLOWED_ORIGINS`` in .env
+listed only 5173. Because the configured value *replaced* the defaults, every
+preflight from 8501 returned 400 and the UI could not create projects.
 """
 
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
+import pytest
+from fastapi.testclient import TestClient
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.main import app, resolve_allowed_origins
 
-ORIGINS = [
+UI_ORIGINS = [
     "http://127.0.0.1:8501",
     "http://localhost:8501",
     "http://127.0.0.1:5173",
@@ -23,68 +21,70 @@ ORIGINS = [
     "http://127.0.0.1:3000",
 ]
 
-ENDPOINTS = [("POST", "/projects"), ("POST", "/tts/preview"), ("PATCH", "/projects/1/scenes")]
+WRITE_ENDPOINTS = [
+    ("POST", "/projects"),
+    ("POST", "/tts/preview"),
+    ("PATCH", "/projects/1/scenes"),
+]
 
 
-def run_case(label: str, env_value: str | None) -> bool:
-    # Rebuild the app fresh so the middleware picks up this env value.
-    for module in [m for m in list(sys.modules) if m.startswith("app.")]:
-        del sys.modules[module]
-    if "app" in sys.modules:
-        del sys.modules["app"]
-
-    if env_value is None:
-        os.environ.pop("UI_ALLOWED_ORIGINS", None)
-    else:
-        os.environ["UI_ALLOWED_ORIGINS"] = env_value
-
-    from fastapi.testclient import TestClient
-
-    from app.main import app
-
-    client = TestClient(app)
-    print(f"\n{label}")
-    print(f"  UI_ALLOWED_ORIGINS = {env_value!r}")
-
-    ok = True
-    for origin in ORIGINS:
-        for method, path in ENDPOINTS:
-            response = client.options(
-                path,
-                headers={
-                    "Origin": origin,
-                    "Access-Control-Request-Method": method,
-                    "Access-Control-Request-Headers": "content-type",
-                },
-            )
-            allowed = response.headers.get("access-control-allow-origin", "")
-            passed = response.status_code == 200 and bool(allowed)
-            ok = ok and passed
-            print(
-                f"    {'OK  ' if passed else 'FAIL'} {response.status_code} "
-                f"{method:<6} {path:<24} origin={origin}"
-            )
-    return ok
+@pytest.fixture(scope="module")
+def client() -> TestClient:
+    return TestClient(app)
 
 
-def main() -> int:
-    results = [
+@pytest.mark.parametrize(
+    "configured",
+    [
         # The exact value that was breaking the launcher UI.
-        run_case("Case 1: only Vite's port configured (the original bug)",
-                 "http://127.0.0.1:5173,http://localhost:5173"),
-        run_case("Case 2: nothing configured", None),
-        run_case("Case 3: current .env value",
-                 "http://127.0.0.1:8501,http://localhost:8501,"
-                 "http://127.0.0.1:5173,http://localhost:5173"),
-    ]
-
-    if all(results):
-        print("\nPASS - every UI origin is accepted in all configurations.")
-        return 0
-    print("\nFAIL")
-    return 1
+        "http://127.0.0.1:5173,http://localhost:5173",
+        None,
+        "",
+        "http://127.0.0.1:8501,http://localhost:8501",
+    ],
+)
+def test_launcher_origin_survives_any_configuration(configured: str | None) -> None:
+    """Port 8501 must be allowed no matter what .env says."""
+    origins = resolve_allowed_origins(configured)
+    assert "http://127.0.0.1:8501" in origins
+    assert "http://localhost:8501" in origins
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def test_configured_origins_are_added_not_substituted() -> None:
+    origins = resolve_allowed_origins("https://studio.example.com")
+    assert "https://studio.example.com" in origins
+    assert "http://127.0.0.1:8501" in origins, "defaults must survive"
+
+
+def test_origins_are_deduplicated_and_normalised() -> None:
+    origins = resolve_allowed_origins("http://127.0.0.1:8501/,http://127.0.0.1:8501")
+    assert origins.count("http://127.0.0.1:8501") == 1
+
+
+@pytest.mark.parametrize("origin", UI_ORIGINS)
+@pytest.mark.parametrize("method,path", WRITE_ENDPOINTS)
+def test_preflight_succeeds(client: TestClient, origin: str, method: str, path: str) -> None:
+    response = client.options(
+        path,
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": method,
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200, f"{method} {path} from {origin}"
+    assert response.headers.get("access-control-allow-origin")
+
+
+def test_preflight_from_arbitrary_localhost_port(client: TestClient) -> None:
+    """Any localhost port should work, so a custom --port never breaks the UI."""
+    response = client.options(
+        "/projects",
+        headers={
+            "Origin": "http://localhost:61234",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
 

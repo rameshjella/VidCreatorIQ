@@ -5,11 +5,20 @@ export type HealthResponse = {
 export type DependencyInfo = {
   ready: boolean;
   detail: string;
+  /** Display name, e.g. "ComfyUI" rather than the map key "comfyui". */
+  label?: string;
+  /** Optional dependencies are informational; only FFmpeg blocks rendering. */
+  optional?: boolean;
+  /** Actionable next step shown when not ready. */
+  hint?: string;
+  /** Full exception text, surfaced behind a disclosure for debugging. */
+  raw_error?: string;
   configured?: string;
   configured_url?: string;
   resolved_path?: string;
   checkpoint_count?: number;
   has_checkpoints?: boolean;
+  checkpoint_detail?: string;
 };
 
 export type DependenciesResponse = {

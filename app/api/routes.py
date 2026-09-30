@@ -42,55 +42,102 @@ def _resolve_binary(command: str) -> str | None:
     return which(command)
 
 
+def _describe_request_error(exc: Exception, url: str) -> str:
+    """Turn a noisy requests/urllib3 exception into one readable line.
+
+    ``str(exc)`` on a refused connection produces a ~300 character wall of
+    nested HTTPConnectionPool/NewConnectionError text that breaks any card
+    layout and tells a user nothing they can act on.
+    """
+    if isinstance(exc, requests.ConnectionError):
+        return f"Not running at {url}"
+    if isinstance(exc, requests.Timeout):
+        return f"No response from {url}"
+    message = str(exc).strip()
+    return message.split("\n")[0][:120] or exc.__class__.__name__
+
+
 @router.get("/health/dependencies")
 def health_dependencies() -> dict:
     ffmpeg_resolved = _resolve_binary(settings.ffmpeg_bin)
     checkpoint_health = _comfyui_checkpoint_health()
 
+    comfy_url = settings.comfyui_url.strip().rstrip("/")
     comfy_ready = False
-    comfy_detail = "COMFYUI_URL is not configured"
-    if settings.comfyui_url.strip():
+    comfy_raw_error = ""
+    if not comfy_url:
+        comfy_detail = "Not configured"
+        comfy_hint = "Set COMFYUI_URL in .env to enable Cinematic mode."
+    else:
         try:
-            response = requests.get(f"{settings.comfyui_url.rstrip('/')}/system_stats", timeout=3)
+            response = requests.get(f"{comfy_url}/system_stats", timeout=3)
             comfy_ready = response.ok
-            comfy_detail = "reachable" if response.ok else f"HTTP {response.status_code}"
+            if response.ok:
+                comfy_detail = f"Connected to {comfy_url}"
+                comfy_hint = ""
+            else:
+                comfy_detail = f"Responded HTTP {response.status_code}"
+                comfy_hint = "ComfyUI is running but returned an error."
         except requests.RequestException as exc:
-            comfy_detail = str(exc)
+            comfy_detail = _describe_request_error(exc, comfy_url)
+            comfy_hint = "Start ComfyUI, or run: python run_ai_movie_maker.py --with-comfyui-auto"
+            comfy_raw_error = str(exc)
+
+    if comfy_ready and not checkpoint_health.get("has_checkpoints", False):
+        comfy_hint = "Connected, but no checkpoints found. Cinematic mode needs a model installed."
 
     piper_bin_resolved = _resolve_binary(settings.piper_executable)
     piper_model_exists = bool(settings.piper_model_path.strip()) and Path(settings.piper_model_path).exists()
     piper_ready = bool(piper_bin_resolved and piper_model_exists)
     if not settings.piper_executable.strip() and not settings.piper_model_path.strip():
-        piper_detail = "not configured (pyttsx3 fallback will be used)"
+        piper_detail = "Not configured"
+        piper_hint = "Optional. Edge neural TTS is used by default and needs no setup."
+    elif piper_ready:
+        piper_detail = "Ready"
+        piper_hint = ""
     else:
-        piper_detail = (
-            "ready"
-            if piper_ready
-            else "binary or model path not valid"
-        )
+        piper_detail = "Binary or model path is not valid"
+        piper_hint = "Check PIPER_EXECUTABLE and PIPER_MODEL_PATH in .env."
 
     dependencies = {
         "ffmpeg": {
+            "label": "FFmpeg",
             "ready": bool(ffmpeg_resolved),
+            "optional": False,
             "configured": settings.ffmpeg_bin,
             "resolved_path": ffmpeg_resolved or "",
-            "detail": "ready" if ffmpeg_resolved else "not found in PATH or configured location",
+            "detail": "Ready" if ffmpeg_resolved else "Not found",
+            "hint": ""
+            if ffmpeg_resolved
+            else "Install FFmpeg or set FFMPEG_BIN in .env. A bundled copy ships with imageio-ffmpeg.",
+            "raw_error": "",
         },
         "comfyui": {
+            "label": "ComfyUI",
             "ready": comfy_ready,
+            # Rendering works without it; only Cinematic mode needs ComfyUI.
+            "optional": True,
             "configured_url": settings.comfyui_url,
+            "resolved_path": comfy_url,
             "detail": comfy_detail,
+            "hint": comfy_hint,
+            "raw_error": comfy_raw_error,
             "checkpoint_count": checkpoint_health.get("checkpoint_count", 0),
             "has_checkpoints": checkpoint_health.get("has_checkpoints", False),
             "checkpoint_detail": checkpoint_health.get("detail", ""),
         },
         "piper": {
+            "label": "Piper TTS",
             "ready": piper_ready,
+            "optional": True,
             "configured_executable": settings.piper_executable,
             "configured_model_path": settings.piper_model_path,
+            "resolved_path": piper_bin_resolved or "",
             "resolved_executable": piper_bin_resolved or "",
             "model_exists": piper_model_exists,
             "detail": piper_detail,
+            "hint": piper_hint,
+            "raw_error": "",
         },
     }
 

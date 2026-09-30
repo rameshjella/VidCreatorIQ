@@ -1,132 +1,160 @@
-# AI Movie Maker (Local Open-Source MVP)
+# VidCreatorIQ
 
-AI Movie Maker converts a script into a narrated MP4 with one click.
+Turn a script into a finished, narrated 1080p film — locally.
 
-## What This MVP Delivers
+Paste a script, pick a voice, press generate. VidCreatorIQ splits it into
+scenes, narrates each one with neural TTS, illustrates every beat, and masters
+a broadcast-ready MP4 with burned-in captions and mixed audio.
 
-- React + Vite web UX for script upload/paste, dependency checks, timeline updates, and job monitoring
-- FastAPI backend with local SQLite project history
-- LangGraph multi-agent pipeline:
-  - Director Agent
-  - Storyboard Agent
-  - Videographer Agent
-  - Narrator Agent
-  - Editor Agent
-- Ollama integration for script-to-scene reasoning (with deterministic fallback)
-- ComfyUI integration point for image generation (with local placeholder fallback)
-- Piper integration for local neural TTS (with `pyttsx3` fallback)
-- FFmpeg-based clip creation, subtitle generation, and final MP4 muxing
-- AI Music Studio tab with real local text-to-music generation, variation, and persisted history
+---
 
-## Architecture
-
-See `docs/architecture.md` for:
-- High-level architecture diagram
-- Sequence diagram
-- Folder structure
-- API design
-- Database schema
-
-## Requirements
-
-- Python 3.11+
-- FFmpeg in PATH (`ffmpeg -version`)
-- Optional but recommended:
-  - Ollama running locally (`ollama serve`)
-  - A pulled model (`ollama pull llama3.1` or `ollama pull qwen2.5`)
-  - Piper binary + voice model
-  - ComfyUI local endpoint
-
-## Setup (Windows/Linux)
+## Quick start
 
 ```bash
 python -m venv .venv
-# Windows PowerShell
-.\.venv\Scripts\Activate.ps1
-# Linux/macOS
-# source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1      # Windows
+# source .venv/bin/activate       # Linux/macOS
+
 pip install -r requirements.txt
-```
+copy .env.example .env            # cp on Linux/macOS
 
-## Configuration
-
-Create `.env` from `.env.example` and adjust paths:
-
-```bash
-copy .env.example .env
-```
-
-## Run Backend
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-## Run Frontend
-
-```bash
-cd ui
-npm install
-npm run dev -- --host 127.0.0.1 --port 8501
-```
-
-## Single-Command Launcher (Windows/Linux/macOS)
-
-Use one command to install (optional), start API + UI in the same terminal, and stream all logs:
-
-```bash
 python run_ai_movie_maker.py --install
 ```
 
-Useful variants:
+Then open **<http://127.0.0.1:8501>**. API docs are at <http://127.0.0.1:8000/docs>.
+
+The only hard requirement is **Python 3.11+**. FFmpeg is bundled via
+`imageio-ffmpeg` if it is not on your PATH, and the default voice
+(Microsoft Edge neural TTS) needs no API key.
+
+### Verify it works
 
 ```bash
-# start without install (React UI default)
-python run_ai_movie_maker.py
-
-# keep legacy Streamlit UI
-python run_ai_movie_maker.py --ui streamlit
-
-# dev mode with API auto-reload
-python run_ai_movie_maker.py --api-reload
-
-# include RQ worker (requires REDIS_URL env)
-python run_ai_movie_maker.py --with-worker
-
-# include ComfyUI auto-start (requires COMFYUI_START_COMMAND)
-python run_ai_movie_maker.py --with-comfyui
-
-# include ComfyUI auto-discovery + auto-start (no COMFYUI_WORKDIR required)
-python run_ai_movie_maker.py --with-comfyui-auto
-
-# smoke-test startup and auto-stop
-python run_ai_movie_maker.py --smoke-test
-
-# warm up Music Studio model cache once API is up
-python run_ai_movie_maker.py --music-warmup
-
-# run an end-to-end Music Studio generation smoke check
-python run_ai_movie_maker.py --music-smoke
+python scripts/smoketest_render.py   # services only, no server needed
+python scripts/smoketest_api.py      # full stack; API must be running
+pytest -q                            # 62 tests
 ```
 
-Logs are written to `logs/`:
-- `logs/launcher_YYYYMMDD_HHMMSS.log` (combined)
-- `logs/api.log`
-- `logs/ui.log`
-- `logs/worker.log` (when `--with-worker` is used)
+`smoketest_api.py` asserts a real, playable MP4 with both streams:
 
-UI stack:
-- Default: React + Vite (`ui/`)
-- Legacy fallback: Streamlit (`streamlit_app.py`) via `--ui streamlit`
+```
+[100.0%] done  Movie ready - 13.3s, 1920x1080
+OK  final MP4      3552 KB  video/mp4
+OK  narration MP3   312 KB  audio/mpeg
+OK  poster JPG      144 KB  image/jpeg
+PASS - full stack produced a real, downloadable movie.
+```
 
-## True ComfyUI Integration
+---
 
-The app now supports workflow-based generation for:
+## What you get
 
-- Stable Diffusion image generation via `app/workflows/comfyui_sdxl_image.json`
-- AnimateDiff video clip generation via `app/workflows/comfyui_animatediff_video.json`
+Every render produces:
 
-Set these in `.env` if you keep custom workflow paths:
+| Artifact | Format |
+|---|---|
+| Final movie | 1920x1080 H.264, 30 fps, CRF 20, `+faststart` |
+| Audio track | AAC 192 kbps, 44.1 kHz, mastered to -16 LUFS |
+| Narration | MP3 192 kbps, 44.1 kHz |
+| Captions | Burned in, plus `.srt` and `.vtt` sidecars |
+| Poster | JPG frame |
+| Per scene | Image, clip, narration, subtitle |
+
+---
+
+## The web UI
+
+Seven views, light theme by default (dark is one click away and persists):
+
+| View | Purpose |
+|---|---|
+| **Script Studio** | Write or paste a script, choose render settings |
+| **Storyboard** | Scene cards, proportional timeline, project library |
+| **Voice Studio** | Pick a narration engine and voice, preview instantly |
+| **Music Studio** | Generate an original score, with variations and history |
+| **Render Console** | Live progress, stage stepper, streaming activity log |
+| **Preview & Export** | Play the film with captions, download every asset |
+| **System Health** | Dependency status and output profile |
+
+Press <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>K</kbd> for the command palette.
+No view is gated — each one is always reachable and explains what to do next.
+
+---
+
+## Narration engines
+
+Seven providers, tried in order and skipped silently when unconfigured. The
+default needs no account.
+
+| Provider | Quality | Requires |
+|---|---|---|
+| ElevenLabs | Highest | `ELEVENLABS_API_KEY` |
+| OpenAI | Very high | `OPENAI_API_KEY` |
+| Azure Speech | Very high | `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` |
+| Google Cloud | High | `GOOGLE_APPLICATION_CREDENTIALS` |
+| **Edge** *(default)* | High | nothing — free and neural |
+| Piper | Medium | local binary + voice model |
+| pyttsx3 | Low | always available (last-resort fallback) |
+
+Set the order in `.env`:
+
+```bash
+TTS_PROVIDER=edge
+TTS_FALLBACK_CHAIN=edge,openai,elevenlabs,azure,google,piper,pyttsx3
+```
+
+Regardless of engine, output is normalised to -16 LUFS, trimmed of leading and
+trailing silence, and encoded to MP3 192 kbps. Results are cached by
+`sha256(text + voice + provider + params)`, so re-rendering never re-bills an API.
+
+---
+
+## Configuration
+
+Everything lives in `.env` — see `.env.example` for the annotated full set.
+
+```bash
+# Render profile
+RENDER_WIDTH=1920
+RENDER_HEIGHT=1080
+RENDER_FPS=30
+RENDER_CRF=20
+RENDER_LOUDNESS_LUFS=-16
+RENDER_TRANSITION=fade
+RENDER_TRANSITION_SECONDS=0.5
+RENDER_KEN_BURNS=true
+RENDER_BURN_SUBTITLES=true
+
+# Binaries (auto-detected if omitted)
+FFMPEG_BIN=
+FFPROBE_BIN=
+
+# Web
+UI_ALLOWED_ORIGINS=http://127.0.0.1:8501,http://localhost:8501
+VITE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+### Visual modes
+
+- **Fast** (default) — designed gradient art cards with Ken Burns motion.
+  Renders in seconds, no models required.
+- **Cinematic** — diffusion frames via ComfyUI. Much slower and needs
+  checkpoints installed; falls back to art cards with a logged warning.
+
+---
+
+## Optional integrations
+
+### Ollama — smarter scene planning
+
+```bash
+ollama serve
+ollama pull llama3.1
+```
+
+Without it, a deterministic splitter is used instead.
+
+### ComfyUI — diffusion imagery
 
 ```bash
 COMFYUI_URL=http://127.0.0.1:8188
@@ -134,73 +162,52 @@ COMFYUI_SD_WORKFLOW=./app/workflows/comfyui_sdxl_image.json
 COMFYUI_ANIMATEDIFF_WORKFLOW=./app/workflows/comfyui_animatediff_video.json
 ```
 
-For single-command startup with launcher-managed ComfyUI, configure:
+Launch it alongside the app:
 
 ```bash
-COMFYUI_URL=http://127.0.0.1:8188
-COMFYUI_START_COMMAND=python main.py --listen 127.0.0.1 --port 8188
-COMFYUI_WORKDIR=C:/Path/To/ComfyUI
-COMFYUI_STARTUP_TIMEOUT=180
+python run_ai_movie_maker.py --with-comfyui       # uses COMFYUI_WORKDIR
+python run_ai_movie_maker.py --with-comfyui-auto  # auto-discovers the install
 ```
 
-Then run:
+Node IDs are auto-detected by class type. To pin them explicitly, derive them
+from your own export:
 
 ```bash
-python run_ai_movie_maker.py --with-comfyui
+python scripts/derive_comfy_ids.py sd_workflow.json animatediff_workflow.json
 ```
 
-If `COMFYUI_WORKDIR` is not set, you can use auto-discovery mode. The launcher tries common local paths such as `./ComfyUI`, `../ComfyUI`, `~/ComfyUI`, and Windows drive roots:
+### Redis — queued jobs with retry
 
 ```bash
-python run_ai_movie_maker.py --with-comfyui-auto
+REDIS_URL=redis://localhost:6379
+python run_ai_movie_maker.py --with-worker
 ```
 
-Optional custom path list for auto mode:
+Enables retry with backoff (`RQ_RETRY_MAX`, `RQ_RETRY_INTERVALS`), cancel, and
+resume-from-scene.
+
+---
+
+## Launcher reference
 
 ```bash
-COMFYUI_AUTO_WORKDIRS=C:/AI/ComfyUI;D:/ComfyUI
+python run_ai_movie_maker.py [options]
 ```
 
-For guaranteed execution against your exact exported workflow, set node IDs from your ComfyUI JSON export:
+| Option | Effect |
+|---|---|
+| `--install` | Install Python and npm dependencies first |
+| `--api-reload` | Auto-reload the API on code changes |
+| `--with-worker` | Start an RQ worker (needs `REDIS_URL`) |
+| `--with-comfyui` | Start ComfyUI from `COMFYUI_WORKDIR` |
+| `--with-comfyui-auto` | Find and start ComfyUI automatically |
+| `--music-warmup` | Preload the music model so the first track is fast |
+| `--smoke-test` | Start everything, verify, then exit |
 
-```bash
-COMFYUI_SD_PROMPT_NODE_ID=6
-COMFYUI_SD_SEED_NODE_ID=3
-COMFYUI_SD_CHECKPOINT_NODE_ID=10
-COMFYUI_SD_OUTPUT_NODE_ID=9
-COMFYUI_AD_PROMPT_NODE_ID=1
-COMFYUI_AD_SEED_NODE_ID=4
-COMFYUI_AD_CHECKPOINT_NODE_ID=11
-COMFYUI_AD_OUTPUT_NODE_ID=6
-```
+Logs stream to the terminal and to `logs/` (`api.log`, `ui.log`, `worker.log`,
+and a combined `launcher_*.log`).
 
-If IDs are not set, the app attempts class-type auto-detection.
-
-You can auto-derive IDs from your exported workflows:
-
-```bash
-python scripts/derive_comfy_ids.py /path/to/sd_workflow.json /path/to/animatediff_workflow.json
-```
-
-## Queue Retry + Resume
-
-- RQ retries are enabled with backoff via `.env`:
-  - `RQ_RETRY_MAX=3`
-  - `RQ_RETRY_INTERVALS=20,60,180`
-- Resume failed jobs from a specific scene index in the UI (`Resume from scene index`).
-- Reorder scenes and edit clip durations in the Streamlit timeline editor, then click **Save Timeline**.
-
-Open:
-- UI: `http://localhost:8501`
-- FastAPI docs: `http://localhost:8000/docs`
-
-## One-Click Flow
-
-1. Paste/upload script in Streamlit.
-2. Click **Create Project**.
-3. Click **Generate Full Movie**.
-4. Refresh job status and preview storyboard.
-5. Download final MP4.
+---
 
 ## Docker
 
@@ -208,53 +215,77 @@ Open:
 docker compose up --build
 ```
 
-Services:
-- API: `http://localhost:8000`
-- UI: `http://localhost:8501`
+API on `:8000`, UI on `:8501`.
 
-## Tests
+---
 
-```bash
-pytest -q
+## Troubleshooting
+
+**Buttons do nothing; console shows a CORS error**
+`UI_ALLOWED_ORIGINS` is *added to* the built-in defaults, and any localhost
+port is accepted, so this should not occur. If it does, confirm
+`VITE_API_BASE_URL` points at the right API.
+
+**Storyboard is empty**
+Open a past project from the library at the bottom of the Storyboard view, or
+generate a new one. Projects persist in `ai_movie_maker.db`.
+
+**System Health shows ComfyUI as "Not running"**
+Expected unless you started it. ComfyUI is **optional** — it only powers
+Cinematic mode, and `ready_for_generation` stays true without it. `WinError
+10061` / connection refused simply means nothing is listening on port 8188.
+Start it with `python run_ai_movie_maker.py --with-comfyui-auto`, or leave it
+off and use Fast mode.
+
+**Music Studio says "Preparing"**
+The model loads lazily on first use and is slow on CPU. Preload it with
+`python run_ai_movie_maker.py --music-warmup`.
+
+**Render fails at the assembly stage**
+Check the Render Console log. Every output is verified with `ffprobe`, so a
+failure here means a genuinely bad file rather than a silent corruption.
+
+**Video and audio drift apart**
+Should be impossible — narration is synthesised first and its measured
+duration drives scene length. If you see it, file the `ffprobe` output.
+
+**UI still looks unstyled after an update**
+Restart the dev server so Vite picks up the new stylesheet
+(`python run_ai_movie_maker.py`), or rebuild with `cd ui && npm run build`.
+
+---
+
+## Project layout
+
+```text
+app/
+  api/          FastAPI routes
+  agents/       LangGraph pipeline
+  services/
+    tts/        Multi-provider narration
+    render_service.py   Normalise, concat, master, verify
+    ffmpeg_runner.py    Binary resolution + ffprobe validation
+  workflows/    ComfyUI graph templates
+ui/src/
+  styles/tokens.css   All design tokens
+  styles.css          Component layer
+  App.tsx             Views and shell
+scripts/        Smoke tests and utilities
+tests/          pytest suite
+docs/architecture.md
 ```
 
-## AI Music Studio
+Deeper design notes — diagrams, schema, the render pipeline's failure modes,
+and the design-token system — are in
+**[docs/architecture.md](docs/architecture.md)**.
 
-The React app includes a **Music Studio** tab for local generative music:
+---
 
-- Prompt + mood/style/energy/instrumentation controls
-- Real model inference through local `transformers` + `torch`
-- Variation generation from previous tracks
-- SQLite-backed generation history
-- WAV playback + download
-- Async non-blocking generation + polling status updates
-- Waveform visualization derived from the actual generated WAV audio
+## Roadmap
 
-Note: music generation is queue-backed. Set `REDIS_URL` and run with `--with-worker` for end-to-end generation, cancel, and retry semantics.
-
-Primary backend endpoints:
-
-- `GET /music/health`
-- `POST /music/warmup`
-- `GET /music/models`
-- `POST /music/generate`
-- `GET /music/generations`
-- `GET /music/generations/{id}`
-- `POST /music/generations/{id}/variation`
-- `POST /music/generations/{id}/cancel`
-- `POST /music/generations/{id}/retry`
-- `GET /music/audio/{id}`
-- `GET /music/generations/{id}/waveform?points=140`
-
-## Sample Script
-
-Use `samples/sample_script.txt` for a quick first run.
-
-## Future Enhancements
-
-1. True image/video generation via Stable Diffusion + AnimateDiff/SVD workflow nodes.
-2. Character consistency with LoRA embeddings and identity prompts.
-3. Distributed task queue with retries and resumable pipelines.
-4. Scene-level timeline editor in UI.
-5. Automatic soundtrack and sound effects layers.
+1. Character consistency via LoRA embeddings and identity prompts
+2. Scene-level timeline editing with drag-to-reorder
+3. Automatic sound-effects layer
+4. Music bed auto-ducking under narration
+5. Multi-track export (stems) for external NLE finishing
 
