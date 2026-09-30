@@ -106,6 +106,7 @@ def create_music_generation(
     instrumentation: str,
     duration_seconds: int,
     parent_generation_id: int | None = None,
+    retry_of_generation_id: int | None = None,
 ) -> models.MusicGeneration:
     record = models.MusicGeneration(
         title=title,
@@ -119,6 +120,7 @@ def create_music_generation(
         duration_seconds=duration_seconds,
         status="generating",
         parent_generation_id=parent_generation_id,
+        retry_of_generation_id=retry_of_generation_id,
     )
     db.add(record)
     db.commit()
@@ -158,6 +160,32 @@ def mark_music_generation_completed(
 def mark_music_generation_failed(db: Session, record: models.MusicGeneration, error_message: str) -> models.MusicGeneration:
     record.status = "failed"
     record.error_message = error_message[:1000]
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def update_music_generation_queue_id(db: Session, record: models.MusicGeneration, queue_job_id: str) -> models.MusicGeneration:
+    record.queue_job_id = queue_job_id
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def request_music_generation_cancel(db: Session, record: models.MusicGeneration) -> models.MusicGeneration:
+    record.cancel_requested = 1
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def mark_music_generation_canceled(db: Session, record: models.MusicGeneration, reason: str = "Canceled by user") -> models.MusicGeneration:
+    record.status = "canceled"
+    record.error_message = reason[:1000]
+    record.cancel_requested = 1
     db.add(record)
     db.commit()
     db.refresh(record)

@@ -91,6 +91,9 @@ class MusicGeneration(Base):
     generation_time_ms: Mapped[int] = mapped_column(Integer, default=0)
     sample_rate: Mapped[int] = mapped_column(Integer, default=32000)
     parent_generation_id: Mapped[int | None] = mapped_column(ForeignKey("music_generations.id"), nullable=True)
+    retry_of_generation_id: Mapped[int | None] = mapped_column(ForeignKey("music_generations.id"), nullable=True)
+    queue_job_id: Mapped[str] = mapped_column(String(128), default="")
+    cancel_requested: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

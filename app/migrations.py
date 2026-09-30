@@ -58,6 +58,9 @@ def run_startup_migrations(engine: Engine) -> None:
             "ALTER TABLE jobs ADD COLUMN total_scenes INTEGER DEFAULT 0",
             "ALTER TABLE jobs ADD COLUMN queue_job_id VARCHAR(128) DEFAULT ''",
             "ALTER TABLE jobs ADD COLUMN last_error TEXT DEFAULT ''",
+            "ALTER TABLE music_generations ADD COLUMN retry_of_generation_id INTEGER NULL",
+            "ALTER TABLE music_generations ADD COLUMN queue_job_id VARCHAR(128) DEFAULT ''",
+            "ALTER TABLE music_generations ADD COLUMN cancel_requested INTEGER DEFAULT 0",
         ]:
             try:
                 conn.execute(text(ddl))

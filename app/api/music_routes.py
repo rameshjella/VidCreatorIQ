@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app import crud
 from app.config import settings
-from app.database import SessionLocal, get_db
+from app.database import get_db
+from app.queue import cancel_queued_job, enqueue_music_generation
 from app.schemas import (
     MusicGenerateRequest,
     MusicGenerationOut,
@@ -29,38 +30,6 @@ def _to_generation_out(record) -> MusicGenerationOut:
     payload.audio_url = audio_url
     payload.generation_label = generation_label
     return payload
-
-
-def _run_generation_job(generation_id: int, seed: int | None = None) -> None:
-    db = SessionLocal()
-    try:
-        record = crud.get_music_generation(db, generation_id)
-        if not record:
-            return
-        record_id: int = int(getattr(record, "id"))
-        record_duration: int = int(getattr(record, "duration_seconds"))
-        record_prompt: str = str(getattr(record, "composed_prompt"))
-        try:
-            result = music_engine.generate_audio(
-                composed_prompt=record_prompt,
-                duration_seconds=record_duration,
-                generation_id=record_id,
-                seed=seed,
-            )
-            valid, _, detail = music_engine.validate_audio_file(result.audio_path)
-            if not valid:
-                raise RuntimeError(detail)
-            crud.mark_music_generation_completed(
-                db,
-                record,
-                audio_path=result.audio_path,
-                generation_time_ms=result.generation_time_ms,
-                sample_rate=result.sample_rate,
-            )
-        except Exception as exc:
-            crud.mark_music_generation_failed(db, record, str(exc))
-    finally:
-        db.close()
 
 
 @router.get("/health")
@@ -103,7 +72,7 @@ def music_models() -> dict:
 
 
 @router.post("/generate", response_model=MusicGenerationOut)
-def generate_music(payload: MusicGenerateRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def generate_music(payload: MusicGenerateRequest, db: Session = Depends(get_db)):
     supported = music_engine.supported_durations()
     if payload.duration_seconds not in supported:
         raise HTTPException(status_code=400, detail=f"duration_seconds must be one of {supported}")
@@ -131,7 +100,18 @@ def generate_music(payload: MusicGenerateRequest, background_tasks: BackgroundTa
     )
 
     record_id: int = int(getattr(record, "id"))
-    background_tasks.add_task(_run_generation_job, record_id, payload.seed)
+    queue_job_id = enqueue_music_generation(record_id, payload.seed)
+    if not queue_job_id:
+        crud.mark_music_generation_failed(
+            db,
+            record,
+            "Queue unavailable. Configure REDIS_URL and run worker to enable music generation.",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Music queue unavailable. Configure REDIS_URL and run `python run_ai_movie_maker.py --with-worker`.",
+        )
+    record = crud.update_music_generation_queue_id(db, record, queue_job_id)
     return _to_generation_out(record)
 
 
@@ -153,7 +133,6 @@ def get_music_generation(generation_id: int, db: Session = Depends(get_db)):
 def create_variation(
     generation_id: int,
     payload: MusicVariationRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     base = crud.get_music_generation(db, generation_id)
@@ -204,8 +183,79 @@ def create_variation(
     )
 
     record_id: int = int(getattr(record, "id"))
-    background_tasks.add_task(_run_generation_job, record_id, payload.seed)
+    queue_job_id = enqueue_music_generation(record_id, payload.seed)
+    if not queue_job_id:
+        crud.mark_music_generation_failed(
+            db,
+            record,
+            "Queue unavailable. Configure REDIS_URL and run worker to enable variation generation.",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Music queue unavailable. Configure REDIS_URL and run `python run_ai_movie_maker.py --with-worker`.",
+        )
+    record = crud.update_music_generation_queue_id(db, record, queue_job_id)
     return _to_generation_out(record)
+
+
+@router.post("/generations/{generation_id}/cancel", response_model=MusicGenerationOut)
+def cancel_music_generation(generation_id: int, db: Session = Depends(get_db)):
+    record = crud.get_music_generation(db, generation_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Generation not found")
+
+    status = str(getattr(record, "status", ""))
+    if status in {"completed", "failed", "canceled"}:
+        return _to_generation_out(record)
+
+    record = crud.request_music_generation_cancel(db, record)
+    queue_job_id = str(getattr(record, "queue_job_id", ""))
+    canceled = cancel_queued_job(queue_job_id)
+    if canceled:
+        record = crud.mark_music_generation_canceled(db, record, "Canceled by user")
+    return _to_generation_out(record)
+
+
+@router.post("/generations/{generation_id}/retry", response_model=MusicGenerationOut)
+def retry_music_generation(generation_id: int, db: Session = Depends(get_db)):
+    source = crud.get_music_generation(db, generation_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Generation not found")
+
+    source_status = str(getattr(source, "status", ""))
+    if source_status not in {"failed", "canceled"}:
+        raise HTTPException(status_code=409, detail="Retry is available only for failed or canceled generations")
+
+    retry_record = crud.create_music_generation(
+        db,
+        title=f"Retry of {str(getattr(source, 'title', 'track'))}",
+        user_prompt=str(getattr(source, "user_prompt")),
+        composed_prompt=str(getattr(source, "composed_prompt")),
+        model=str(getattr(source, "model")),
+        mood=str(getattr(source, "mood")),
+        style=str(getattr(source, "style")),
+        energy=str(getattr(source, "energy")),
+        instrumentation=str(getattr(source, "instrumentation")),
+        duration_seconds=int(getattr(source, "duration_seconds")),
+        parent_generation_id=int(getattr(source, "parent_generation_id")) if getattr(source, "parent_generation_id") else None,
+        retry_of_generation_id=int(getattr(source, "id")),
+    )
+
+    retry_id = int(getattr(retry_record, "id"))
+    queue_job_id = enqueue_music_generation(retry_id, seed=None)
+    if not queue_job_id:
+        crud.mark_music_generation_failed(
+            db,
+            retry_record,
+            "Queue unavailable. Configure REDIS_URL and run worker to enable retry.",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Music queue unavailable. Configure REDIS_URL and run `python run_ai_movie_maker.py --with-worker`.",
+        )
+
+    retry_record = crud.update_music_generation_queue_id(db, retry_record, queue_job_id)
+    return _to_generation_out(retry_record)
 
 
 @router.get("/generations/{generation_id}/waveform", response_model=MusicWaveformOut)

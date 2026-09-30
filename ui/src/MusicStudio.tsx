@@ -90,7 +90,7 @@ export default function MusicStudio({ apiBase }: Props) {
       if (current.status === "completed") {
         return current;
       }
-      if (current.status === "failed") {
+      if (current.status === "failed" || current.status === "canceled") {
         throw new Error(current.error_message || "Generation failed");
       }
       await new Promise((resolve) => setTimeout(resolve, 1500));

@@ -106,6 +106,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
+  cancelMusicGeneration: (baseUrl: string, generationId: number) =>
+    requestJson<MusicGenerationOut>(`${baseUrl}/music/generations/${generationId}/cancel`, {
+      method: "POST",
+    }),
+  retryMusicGeneration: (baseUrl: string, generationId: number) =>
+    requestJson<MusicGenerationOut>(`${baseUrl}/music/generations/${generationId}/retry`, {
+      method: "POST",
+    }),
   getMusicWaveform: (baseUrl: string, generationId: number, points = 140) =>
     requestJson<MusicWaveformOut>(`${baseUrl}/music/generations/${generationId}/waveform?points=${points}`),
 };

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from redis import Redis
+from rq.command import send_stop_job_command
+from rq.job import Job
 from rq import Queue, Retry
 
 from app.config import settings
@@ -11,6 +13,12 @@ def get_queue() -> Queue | None:
         return None
     conn = Redis.from_url(settings.redis_url)
     return Queue(settings.queue_name, connection=conn, default_timeout=60 * 60)
+
+
+def get_redis_connection() -> Redis | None:
+    if not settings.redis_url.strip():
+        return None
+    return Redis.from_url(settings.redis_url)
 
 
 def _retry_policy() -> Retry:
@@ -43,4 +51,45 @@ def enqueue_pipeline(
         return task.id
     except Exception:
         return None
+
+
+def enqueue_music_generation(generation_id: int, seed: int | None = None) -> str | None:
+    try:
+        queue = get_queue()
+    except Exception:
+        return None
+    if not queue:
+        return None
+    try:
+        task = queue.enqueue(
+            "app.worker.run_music_generation_job",
+            generation_id,
+            seed,
+            retry=_retry_policy(),
+            result_ttl=24 * 60 * 60,
+        )
+        return task.id
+    except Exception:
+        return None
+
+
+def cancel_queued_job(queue_job_id: str | None) -> bool:
+    queue_job_id = "" if queue_job_id is None else queue_job_id.strip()
+    try:
+        conn = Redis.from_url(settings.redis_url)
+    except Exception:
+        return False
+    try:
+        job = Job.fetch(queue_job_id, connection=conn)
+    except Exception:
+        return False
+    try:
+        if job.get_status(refresh=True) == "started":
+            send_stop_job_command(conn, queue_job_id)
+        else:
+            job.cancel()
+        return True
+    except Exception:
+        return False
+
 

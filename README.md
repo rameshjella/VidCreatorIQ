@@ -230,6 +230,8 @@ The React app includes a **Music Studio** tab for local generative music:
 - Async non-blocking generation + polling status updates
 - Waveform visualization derived from the actual generated WAV audio
 
+Note: music generation is queue-backed. Set `REDIS_URL` and run with `--with-worker` for end-to-end generation, cancel, and retry semantics.
+
 Primary backend endpoints:
 
 - `GET /music/health`
@@ -239,6 +241,8 @@ Primary backend endpoints:
 - `GET /music/generations`
 - `GET /music/generations/{id}`
 - `POST /music/generations/{id}/variation`
+- `POST /music/generations/{id}/cancel`
+- `POST /music/generations/{id}/retry`
 - `GET /music/audio/{id}`
 - `GET /music/generations/{id}/waveform?points=140`
 
