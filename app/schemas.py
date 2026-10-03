@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -133,6 +134,7 @@ class MovieRunResponse(BaseModel):
 
 class RunProjectRequest(BaseModel):
     visual_mode: str = "basic"
+    cinematic_quality_profile: Literal["fast", "balanced", "true_motion"] = "balanced"
     music_generation_id: int | None = None
     export_stems: bool = True
 

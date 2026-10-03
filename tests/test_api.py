@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.api import routes as api_routes
 from app.database import SessionLocal
 from app.models import Scene
 from app.main import app
@@ -168,5 +169,45 @@ def test_character_registry_and_scene_assignment() -> None:
 def test_stems_package_endpoint_missing_job() -> None:
     response = client.get("/jobs/99999999/stems-package")
     assert response.status_code == 404
+
+
+def test_run_project_rejects_invalid_cinematic_quality_profile() -> None:
+    created = client.post(
+        "/projects",
+        json={
+            "title": "Profile Validation",
+            "script_text": "This is a valid test script with enough characters to pass validation.",
+            "language": "en",
+        },
+    )
+    assert created.status_code == 200
+    project_id = created.json()["id"]
+
+    response = client.post(
+        f"/projects/{project_id}/run",
+        json={"visual_mode": "cinematic", "cinematic_quality_profile": "ultra"},
+    )
+    assert response.status_code == 422
+
+
+def test_true_motion_requires_comfyui_readiness(monkeypatch) -> None:
+    created = client.post(
+        "/projects",
+        json={
+            "title": "True Motion Readiness",
+            "script_text": "This is a valid test script with enough characters to pass validation.",
+            "language": "en",
+        },
+    )
+    assert created.status_code == 200
+    project_id = created.json()["id"]
+
+    monkeypatch.setattr(api_routes, "_is_comfyui_ready", lambda: False)
+    response = client.post(
+        f"/projects/{project_id}/run",
+        json={"visual_mode": "cinematic", "cinematic_quality_profile": "true_motion"},
+    )
+    assert response.status_code == 400
+    assert "True Motion requires ComfyUI readiness" in response.text
 
 

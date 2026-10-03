@@ -31,6 +31,7 @@ import type {
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || "http://127.0.0.1:8000";
 
 type View = "studio" | "storyboard" | "voice" | "render" | "preview" | "music" | "system";
+type CinematicQualityProfile = "fast" | "balanced" | "true_motion";
 
 const NAV: Array<{ id: View; label: string; icon: string; group: string }> = [
   { id: "studio", label: "Script Studio", icon: "\u270E", group: "Create" },
@@ -77,6 +78,7 @@ function Shell() {
   const [script, setScript] = useState(SAMPLE_SCRIPT);
   const [language, setLanguage] = useState("en");
   const [visualMode, setVisualMode] = useState<"basic" | "cinematic">("basic");
+  const [cinematicQualityProfile, setCinematicQualityProfile] = useState<CinematicQualityProfile>("balanced");
   const [characterIdentityPrompt, setCharacterIdentityPrompt] = useState("");
   const [characterLoraTags, setCharacterLoraTags] = useState("");
 
@@ -263,7 +265,9 @@ function Shell() {
       });
       setProject(created);
 
-      const run = await api.runProject(BASE_URL, created.id, visualMode);
+      const run = await api.runProject(BASE_URL, created.id, visualMode, {
+        cinematic_quality_profile: cinematicQualityProfile,
+      });
       setJob(await api.getJob(BASE_URL, run.job_id));
       startPolling(run.job_id, created.id);
       toast("info", "Render started.");
@@ -280,6 +284,7 @@ function Shell() {
     characterIdentityPrompt,
     characterLoraTags,
     visualMode,
+    cinematicQualityProfile,
     startPolling,
     toast,
   ]);
@@ -338,6 +343,7 @@ function Shell() {
     setBusy(false);
     setTitle("Untitled Project");
     setScript("");
+    setCinematicQualityProfile("balanced");
     setCharacterIdentityPrompt("");
     setCharacterLoraTags("");
     setView("studio");
@@ -483,6 +489,8 @@ function Shell() {
                 setLanguage={setLanguage}
                 visualMode={visualMode}
                 setVisualMode={setVisualMode}
+                cinematicQualityProfile={cinematicQualityProfile}
+                setCinematicQualityProfile={setCinematicQualityProfile}
                 characterIdentityPrompt={characterIdentityPrompt}
                 setCharacterIdentityPrompt={setCharacterIdentityPrompt}
                 characterLoraTags={characterLoraTags}
@@ -678,6 +686,8 @@ function StudioView(props: {
   setLanguage: (v: string) => void;
   visualMode: "basic" | "cinematic";
   setVisualMode: (v: "basic" | "cinematic") => void;
+  cinematicQualityProfile: CinematicQualityProfile;
+  setCinematicQualityProfile: (v: CinematicQualityProfile) => void;
   characterIdentityPrompt: string;
   setCharacterIdentityPrompt: (v: string) => void;
   characterLoraTags: string;
@@ -797,6 +807,28 @@ function StudioView(props: {
                     : "Diffusion-generated frames via ComfyUI. Much slower, needs models installed."}
                 </span>
               </Field>
+
+              {props.visualMode === "cinematic" && (
+                <Field label="Cinematic quality profile">
+                  <Segmented
+                    label="Cinematic quality profile"
+                    value={props.cinematicQualityProfile}
+                    onChange={(v) => props.setCinematicQualityProfile(v as CinematicQualityProfile)}
+                    options={[
+                      { value: "fast", label: "Fast" },
+                      { value: "balanced", label: "Balanced" },
+                      { value: "true_motion", label: "True Motion" },
+                    ]}
+                  />
+                  <span className="hint">
+                    {props.cinematicQualityProfile === "fast"
+                      ? "Reliable and quick. Uses cinematic stills with motion clipping."
+                      : props.cinematicQualityProfile === "true_motion"
+                        ? "Strict motion path. Requires temporal ComfyUI workflow and model readiness."
+                        : "Auto-picks speed vs motion based on readiness and estimated runtime."}
+                  </span>
+                </Field>
+              )}
 
               <Field label="Language" htmlFor="lang">
                 <select

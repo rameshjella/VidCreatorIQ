@@ -31,6 +31,7 @@ def enqueue_pipeline(
     job_id: int,
     resume_from_scene_index: int | None = None,
     visual_mode: str = "basic",
+    cinematic_quality_profile: str = "balanced",
     music_path: str | None = None,
     export_stems: bool = True,
 ) -> str | None:
@@ -47,6 +48,7 @@ def enqueue_pipeline(
             job_id,
             resume_from_scene_index,
             visual_mode,
+            cinematic_quality_profile,
             music_path,
             export_stems,
             retry=_retry_policy(),

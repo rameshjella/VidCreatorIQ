@@ -11,6 +11,7 @@ def run_pipeline_job(
     job_id: int,
     resume_from_scene_index: int | None = None,
     visual_mode: str = "basic",
+    cinematic_quality_profile: str = "balanced",
     music_path: str | None = None,
     export_stems: bool = True,
 ) -> None:
@@ -27,6 +28,7 @@ def run_pipeline_job(
             resume=True,
             resume_from_scene_index=resume_from_scene_index,
             visual_mode=visual_mode,
+            cinematic_quality_profile=cinematic_quality_profile,
             music_path=music_path,
             export_stems=export_stems,
         )

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse
+import json
 import requests
 from pathlib import Path
 from shutil import which
@@ -170,6 +171,72 @@ def _is_comfyui_ready() -> bool:
 
 def _has_comfyui_checkpoints() -> bool:
     return bool(_comfyui_checkpoint_health().get("has_checkpoints", False))
+
+
+def _has_temporal_video_workflow_nodes() -> bool:
+    try:
+        payload = json.loads(Path(settings.comfyui_animatediff_workflow).read_text(encoding="utf-8"))
+    except Exception:
+        return False
+
+    markers = ("animatediff", "ade_", "motionmodel", "svd", "videolinear")
+    for node in payload.values() if isinstance(payload, dict) else []:
+        class_type = str((node or {}).get("class_type", "")).lower() if isinstance(node, dict) else ""
+        if any(marker in class_type for marker in markers):
+            return True
+    return False
+
+
+def _estimate_script_runtime_seconds(script_text: str) -> int:
+    words = len([w for w in (script_text or "").split() if w.strip()])
+    # 150 wpm baseline, rounded to nearest second.
+    return max(1, int(round(words * 60 / 150)))
+
+
+def _resolve_cinematic_quality_profile(requested: str, script_text: str) -> str:
+    requested = (requested or "balanced").strip().lower()
+    if requested not in {"fast", "balanced", "true_motion"}:
+        requested = "balanced"
+
+    if requested == "fast":
+        return "fast"
+
+    comfy_ready = _is_comfyui_ready()
+    has_checkpoints = _has_comfyui_checkpoints()
+    has_temporal_graph = _has_temporal_video_workflow_nodes()
+
+    if requested == "true_motion":
+        if not comfy_ready:
+            raise HTTPException(
+                status_code=400,
+                detail="True Motion requires ComfyUI readiness. Configure COMFYUI_URL and ensure the server is running.",
+            )
+        if not has_checkpoints:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "True Motion requires at least one ComfyUI checkpoint model. "
+                    "Add a .safetensors/.ckpt file and verify /health/comfyui-checkpoints."
+                ),
+            )
+        if not has_temporal_graph:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "True Motion requires a temporal ComfyUI video workflow (AnimateDiff/SVD). "
+                    "Update COMFYUI_ANIMATEDIFF_WORKFLOW to a motion-capable graph."
+                ),
+            )
+        return "true_motion"
+
+    # Balanced: prefer speed unless motion path is healthy and script is short.
+    if not (comfy_ready and has_checkpoints and has_temporal_graph):
+        return "fast"
+
+    est_runtime = _estimate_script_runtime_seconds(script_text)
+    if est_runtime > int(settings.render_cinematic_balanced_max_runtime_seconds):
+        return "fast"
+    return "true_motion"
 
 
 def _comfyui_checkpoint_health(sample_limit: int = 8) -> dict:
@@ -506,6 +573,7 @@ def _run_pipeline(
     job_id: int,
     resume_from_scene_index: int | None = None,
     visual_mode: str = "basic",
+    cinematic_quality_profile: str = "balanced",
     music_path: str | None = None,
     export_stems: bool = True,
 ):
@@ -524,6 +592,7 @@ def _run_pipeline(
             resume=True,
             resume_from_scene_index=resume_from_scene_index,
             visual_mode=visual_mode,
+            cinematic_quality_profile=cinematic_quality_profile,
             music_path=music_path,
             export_stems=export_stems,
         )
@@ -548,18 +617,12 @@ def run_project(
     visual_mode = (payload.visual_mode or "basic").strip().lower()
     if visual_mode not in {"basic", "cinematic"}:
         raise HTTPException(status_code=400, detail="visual_mode must be 'basic' or 'cinematic'")
-    if visual_mode == "cinematic" and not _is_comfyui_ready():
-        raise HTTPException(
-            status_code=400,
-            detail="Cinematic mode requires ComfyUI readiness. Configure COMFYUI_URL and ensure the server is running.",
-        )
-    if visual_mode == "cinematic" and not _has_comfyui_checkpoints():
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Cinematic mode requires at least one ComfyUI checkpoint model. "
-                "Add a .safetensors/.ckpt file to checkpoints and verify /health/comfyui-checkpoints."
-            ),
+
+    effective_profile = "balanced"
+    if visual_mode == "cinematic":
+        effective_profile = _resolve_cinematic_quality_profile(
+            payload.cinematic_quality_profile,
+            project.script_text,
         )
 
     music_path: str | None = None
@@ -579,13 +642,23 @@ def run_project(
         job.id,
         resume_from_scene_index=None,
         visual_mode=visual_mode,
+        cinematic_quality_profile=effective_profile,
         music_path=music_path,
         export_stems=payload.export_stems,
     )
     if queue_job_id:
         crud.update_job_queue_id(db, job, queue_job_id)
     else:
-        background_tasks.add_task(_run_pipeline, project_id, job.id, None, visual_mode, music_path, payload.export_stems)
+        background_tasks.add_task(
+            _run_pipeline,
+            project_id,
+            job.id,
+            None,
+            visual_mode,
+            effective_profile,
+            music_path,
+            payload.export_stems,
+        )
     return {"job_id": job.id, "project_id": project_id, "status": "queued"}
 
 
@@ -624,6 +697,7 @@ def resume_job(
         job.id,
         resume_from_scene_index=payload.failed_scene_index,
         visual_mode="basic",
+        cinematic_quality_profile="fast",
     )
     if queue_job_id:
         crud.update_job_queue_id(db, job, queue_job_id)

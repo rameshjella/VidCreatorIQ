@@ -51,13 +51,18 @@ export const api = {
     baseUrl: string,
     projectId: number,
     visualMode: "basic" | "cinematic",
-    options?: { music_generation_id?: number | null; export_stems?: boolean },
+    options?: {
+      cinematic_quality_profile?: "fast" | "balanced" | "true_motion";
+      music_generation_id?: number | null;
+      export_stems?: boolean;
+    },
   ) =>
     requestJson<MovieRunResponse>(`${baseUrl}/projects/${projectId}/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         visual_mode: visualMode,
+        cinematic_quality_profile: options?.cinematic_quality_profile ?? "balanced",
         music_generation_id: options?.music_generation_id ?? null,
         export_stems: options?.export_stems ?? true,
       }),

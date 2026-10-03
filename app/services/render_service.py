@@ -45,6 +45,7 @@ class RenderService:
         self.fps = int(settings.render_fps)
         self.sample_rate = int(settings.render_audio_sample_rate)
         self.ffmpeg_cmd = ff.ffmpeg_bin()
+        self._comfy_video_temporal_ready: bool | None = None
 
     # ------------------------------------------------------------------
     # Dependency checks
@@ -162,6 +163,12 @@ class RenderService:
         duration: float | None = None,
         loras: list[dict] | None = None,
     ) -> Path:
+        if not self._is_temporal_video_workflow(Path(settings.comfyui_animatediff_workflow)):
+            raise FFmpegError(
+                "ComfyUI cinematic workflow has no temporal motion nodes; "
+                "falling back to cinematic still-image motion clips."
+            )
+
         raw_path = self.out_dir / f"scene_{scene_index:03d}_raw.mp4"
         client = ComfyUIWorkflowClient(settings.comfyui_url)
         history = client.run_workflow(
@@ -180,6 +187,31 @@ class RenderService:
         )
         client.download_first_video(history, raw_path)
         return self.normalize_clip(raw_path, scene_index, duration)
+
+    def _is_temporal_video_workflow(self, workflow_path: Path) -> bool:
+        """Best-effort check that the configured ComfyUI graph can render moving video.
+
+        The default fallback graph may emit a tiny handful of frames (or effectively
+        stills) while taking several minutes. Detect this early and let the pipeline
+        use the fast cinematic image-motion path instead.
+        """
+        if self._comfy_video_temporal_ready is not None:
+            return self._comfy_video_temporal_ready
+
+        try:
+            payload = json.loads(Path(workflow_path).read_text(encoding="utf-8"))
+        except Exception:
+            self._comfy_video_temporal_ready = False
+            return False
+
+        markers = ("animatediff", "ade_", "motionmodel", "svd", "videolinear")
+        class_types = [
+            str((node or {}).get("class_type", "")).lower()
+            for node in payload.values()
+            if isinstance(node, dict)
+        ]
+        self._comfy_video_temporal_ready = any(any(marker in ct for marker in markers) for ct in class_types)
+        return self._comfy_video_temporal_ready
 
     # ------------------------------------------------------------------
     # Concatenation

@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     render_auto_sfx: bool = True
     render_sfx_gain_db: float = -16.0
     sfx_library_dir: str = "./workspace/sfx_library"
+    render_cinematic_balanced_max_runtime_seconds: int = 35
     render_min_scene_seconds: float = 2.0
 
     # ---------------- TTS ----------------

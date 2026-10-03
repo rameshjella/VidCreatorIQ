@@ -43,6 +43,7 @@ class MoviePipeline:
         resume: bool = True,
         resume_from_scene_index: int | None = None,
         visual_mode: str = "basic",
+        cinematic_quality_profile: str = "balanced",
         tts_provider: str | None = None,
         tts_voice: str = "",
         music_path: str | None = None,
@@ -111,6 +112,12 @@ class MoviePipeline:
         subtitle_service = SubtitleService(root / "subs")
         render_service = RenderService(root / "video")
 
+        profile = (cinematic_quality_profile or "balanced").strip().lower()
+        if profile not in {"fast", "balanced", "true_motion"}:
+            profile = "balanced"
+        force_fast_cinematic = visual_mode == "cinematic" and profile == "fast"
+        strict_true_motion = visual_mode == "cinematic" and profile == "true_motion"
+
         self._update_job(job, "processing", "dependency_check", "Validating FFmpeg dependency", 0.04)
         render_service.ensure_ffmpeg_available()
 
@@ -121,6 +128,13 @@ class MoviePipeline:
 
         forced_restart_index = resume_from_scene_index or 1
         total = len(scenes)
+        cinematic_video_disabled = force_fast_cinematic
+
+        if visual_mode == "cinematic" and strict_true_motion:
+            if not render_service._is_temporal_video_workflow(Path(settings.comfyui_animatediff_workflow)):
+                raise RuntimeError(
+                    "True Motion profile selected, but COMFYUI_ANIMATEDIFF_WORKFLOW has no temporal motion nodes."
+                )
 
         for idx, scene in enumerate(scenes, start=1):
             must_regenerate = scene.scene_index >= forced_restart_index
@@ -184,13 +198,37 @@ class MoviePipeline:
                     f"Rendering scene {scene.scene_index} of {total}",
                     base + span * (idx - 1) + span * 0.7,
                 )
-                if visual_mode == "cinematic" and (scene.image_prompt or "").strip():
-                    clip = render_service.generate_clip_with_comfyui(
-                        enriched_prompt,
-                        scene.scene_index,
-                        self._clip_length(scene_duration, idx, total),
-                        loras=scene_loras,
-                    )
+                if visual_mode == "cinematic" and (scene.image_prompt or "").strip() and not cinematic_video_disabled:
+                    try:
+                        clip = render_service.generate_clip_with_comfyui(
+                            enriched_prompt,
+                            scene.scene_index,
+                            self._clip_length(scene_duration, idx, total),
+                            loras=scene_loras,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        if strict_true_motion:
+                            raise RuntimeError(
+                                f"True Motion profile failed on scene {scene.scene_index}: {exc}"
+                            ) from exc
+                        cinematic_video_disabled = True
+                        logger.warning(
+                            "Cinematic video generation unavailable for scene %s: %s. Falling back to image-motion clips.",
+                            scene.scene_index,
+                            exc,
+                        )
+                        self._update_job(
+                            job,
+                            "processing",
+                            "videographer",
+                            "Cinematic video workflow unavailable; switching to fast cinematic motion clips",
+                            base + span * (idx - 1) + span * 0.72,
+                        )
+                        clip = render_service.image_to_clip(
+                            img,
+                            self._clip_length(scene_duration, idx, total),
+                            scene.scene_index,
+                        )
                 else:
                     clip = render_service.image_to_clip(
                         img, self._clip_length(scene_duration, idx, total), scene.scene_index
