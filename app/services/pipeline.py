@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.agents.graph import build_graph
 from app.config import settings
-from app.models import Job, Project, Scene
+from app.models import CharacterProfile, Job, Project, Scene, SceneCharacter
 from app.services import ffmpeg_runner as ff
 from app.services.image_service import ImageService
 from app.services.narration_service import TTSService
@@ -46,18 +46,36 @@ class MoviePipeline:
         tts_provider: str | None = None,
         tts_voice: str = "",
         music_path: str | None = None,
+        export_stems: bool = True,
     ) -> Job:
         job.attempts = (job.attempts or 0) + 1
         self.db.add(job)
         self.db.commit()
         project.status = "processing"
         self._update_job(job, "processing", "director", "Analyzing script", 0.02)
+        project_characters = crud.list_project_characters(self.db, int(project.id))
 
         scenes = self.db.query(Scene).filter(Scene.project_id == project.id).order_by(Scene.scene_index).all()
         if not scenes or not resume:
             graph = build_graph()
             state = graph.invoke(
-                {"script_text": project.script_text, "language": project.language, "scenes": [], "style": ""}
+                {
+                    "script_text": project.script_text,
+                    "language": project.language,
+                    "scenes": [],
+                    "style": "",
+                    "character_identity_prompt": project.character_identity_prompt or "",
+                    "character_lora_tags": project.character_lora_tags or "",
+                    "character_registry": [
+                        {
+                            "name": c.name,
+                            "identity_prompt": c.identity_prompt,
+                            "lora_adapter": c.lora_adapter,
+                            "lora_strength": c.lora_strength,
+                        }
+                        for c in project_characters
+                    ],
+                }
             )
 
             self.db.execute(delete(Scene).where(Scene.project_id == project.id))
@@ -77,6 +95,7 @@ class MoviePipeline:
                 )
             self.db.commit()
             scenes = self.db.query(Scene).filter(Scene.project_id == project.id).order_by(Scene.scene_index).all()
+            self._auto_assign_scene_characters(scenes, project_characters)
 
         if not scenes:
             raise RuntimeError("The script could not be split into any scenes. Check the script content.")
@@ -150,7 +169,13 @@ class MoviePipeline:
                     f"Illustrating scene {scene.scene_index} of {total}",
                     base + span * (idx - 1) + span * 0.45,
                 )
-                img = image_service.generate(scene.image_prompt, scene.scene_index, visual_mode=visual_mode)
+                enriched_prompt, scene_loras = self._enrich_scene_visual_prompt(scene, int(project.id))
+                img = image_service.generate(
+                    enriched_prompt,
+                    scene.scene_index,
+                    visual_mode=visual_mode,
+                    loras=scene_loras,
+                )
                 scene.image_path = str(img)
 
                 # 3. Motion, matched to the narration length.
@@ -161,7 +186,10 @@ class MoviePipeline:
                 )
                 if visual_mode == "cinematic" and (scene.image_prompt or "").strip():
                     clip = render_service.generate_clip_with_comfyui(
-                        scene.image_prompt, scene.scene_index, self._clip_length(scene_duration, idx, total)
+                        enriched_prompt,
+                        scene.scene_index,
+                        self._clip_length(scene_duration, idx, total),
+                        loras=scene_loras,
                     )
                 else:
                     clip = render_service.image_to_clip(
@@ -198,6 +226,24 @@ class MoviePipeline:
         merged_audio = render_service.concat_audio(audios)
         narration_mp3 = render_service.to_mp3(merged_audio)
 
+        sfx_track: Path | None = None
+        if settings.render_auto_sfx:
+            self._update_job(job, "processing", "editor", "Designing automatic SFX layer", assemble_base + 0.13)
+            sfx_track = render_service.auto_sfx_track(sub_texts, durations)
+            if sfx_track:
+                job.output_sfx_path = str(render_service.to_mp3(sfx_track, output_name="sfx.mp3"))
+
+        if export_stems:
+            stems = render_service.export_stems(
+                narration_path=merged_audio,
+                music_path=Path(music_path) if music_path else None,
+                sfx_path=sfx_track,
+            )
+            stems_zip = render_service.export_stems_zip(stems)
+            job.output_music_path = str(stems.get("music", ""))
+            job.output_stems_manifest_path = str(stems.get("manifest", ""))
+            job.output_stems_zip_path = str(stems_zip)
+
         self._update_job(job, "processing", "editor", "Timing captions", assemble_base + 0.15)
         merged_subs = subtitle_service.merge_scene_subtitles(sub_texts, durations)
 
@@ -207,6 +253,7 @@ class MoviePipeline:
             merged_audio,
             merged_subs,
             music_path=Path(music_path) if music_path else None,
+            sfx_path=sfx_track,
         )
 
         # Confirm we really produced a playable movie before declaring success.
@@ -250,6 +297,59 @@ class MoviePipeline:
             return narration_duration + fade
         return narration_duration
 
+    def _auto_assign_scene_characters(self, scenes: list[Scene], characters: list[CharacterProfile]) -> None:
+        if not scenes or not characters:
+            return
+
+        existing = self.db.query(SceneCharacter).join(Scene).filter(Scene.project_id == scenes[0].project_id).count()
+        if existing > 0:
+            return
+
+        for scene in scenes:
+            lowered = (scene.script_chunk or "").lower()
+            matched = [c for c in characters if c.name and c.name.lower() in lowered]
+            if not matched and len(characters) == 1:
+                matched = [characters[0]]
+            for idx, character in enumerate(matched[:3]):
+                self.db.add(
+                    SceneCharacter(
+                        scene_id=scene.id,
+                        character_id=character.id,
+                        role="lead" if idx == 0 else "support",
+                        weight=1.0 if idx == 0 else 0.7,
+                    )
+                )
+        self.db.commit()
+
+    def _enrich_scene_visual_prompt(self, scene: Scene, project_id: int) -> tuple[str, list[dict]]:
+        assignments = (
+            self.db.query(SceneCharacter, CharacterProfile)
+            .join(CharacterProfile, CharacterProfile.id == SceneCharacter.character_id)
+            .filter(SceneCharacter.scene_id == scene.id, CharacterProfile.project_id == project_id)
+            .order_by(SceneCharacter.weight.desc(), SceneCharacter.id.asc())
+            .all()
+        )
+        if not assignments:
+            return scene.image_prompt, []
+
+        identity_bits: list[str] = []
+        loras: list[dict] = []
+        for assignment, character in assignments:
+            if character.identity_prompt:
+                identity_bits.append(f"{character.name}: {character.identity_prompt}")
+            adapter = (character.lora_adapter or "").strip()
+            if adapter:
+                loras.append(
+                    {
+                        "adapter": adapter,
+                        "strength": float(character.lora_strength or assignment.weight or 0.8),
+                    }
+                )
+
+        if not identity_bits:
+            return scene.image_prompt, loras
+        return f"{scene.image_prompt}, characters: {'; '.join(identity_bits)}", loras
+
     def regenerate_scene(self, project: Project, scene: Scene) -> Scene:
         root = _project_dir(project.id)
         image_service = ImageService(root / "images")
@@ -260,7 +360,8 @@ class MoviePipeline:
         result = tts_service.synthesize_detailed(scene.script_chunk, scene.scene_index)
         duration = max(float(settings.render_min_scene_seconds), result.duration)
 
-        img = image_service.generate(scene.image_prompt, scene.scene_index)
+        enriched_prompt, scene_loras = self._enrich_scene_visual_prompt(scene, int(project.id))
+        img = image_service.generate(enriched_prompt, scene.scene_index, loras=scene_loras)
         clip = render_service.image_to_clip(img, duration, scene.scene_index)
         sub = subtitle_service.create_scene_subtitle(scene.script_chunk, duration, scene.scene_index)
 

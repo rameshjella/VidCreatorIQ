@@ -31,6 +31,8 @@ def enqueue_pipeline(
     job_id: int,
     resume_from_scene_index: int | None = None,
     visual_mode: str = "basic",
+    music_path: str | None = None,
+    export_stems: bool = True,
 ) -> str | None:
     try:
         queue = get_queue()
@@ -45,6 +47,8 @@ def enqueue_pipeline(
             job_id,
             resume_from_scene_index,
             visual_mode,
+            music_path,
+            export_stems,
             retry=_retry_policy(),
             result_ttl=24 * 60 * 60,
         )

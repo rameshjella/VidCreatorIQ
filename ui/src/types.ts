@@ -65,6 +65,17 @@ export type ProjectOut = {
   title: string;
   script_text: string;
   language: string;
+  character_identity_prompt: string;
+  character_lora_tags: string;
+  characters: Array<{
+    id: number;
+    project_id: number;
+    name: string;
+    identity_prompt: string;
+    lora_adapter: string;
+    lora_strength: number;
+    notes: string;
+  }>;
   status: string;
   created_at: string;
   updated_at: string;
@@ -226,9 +237,13 @@ export interface JobArtifacts {
   progress: number;
   video_url: string;
   audio_url: string;
+  music_url: string;
+  sfx_url: string;
   subtitle_url: string;
   captions_vtt_url: string;
   poster_url: string;
+  stems_manifest_url: string;
+  stems_zip_url: string;
   duration_seconds: number;
   scenes: SceneArtifact[];
 }

@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.config import settings
 from app.database import get_db
-from app.models import Job, Scene
+from app.models import Job, MusicGeneration, Scene
 from app.queue import enqueue_pipeline
 from app.schemas import (
+    CharacterCreate,
+    CharacterOut,
     JobEventOut,
     JobOut,
     MovieRunResponse,
@@ -20,6 +22,8 @@ from app.schemas import (
     ResumeJobRequest,
     RunProjectRequest,
     SceneOut,
+    SceneCharactersUpdateRequest,
+    SceneCharacterAssignmentOut,
     SceneTimelineUpdateRequest,
 )
 from app.services.pipeline import MoviePipeline
@@ -408,7 +412,30 @@ def health_dependency_doctor() -> dict:
 
 @router.post("/projects", response_model=ProjectOut)
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
-    project = crud.create_project(db, payload.title, payload.script_text, payload.language)
+    project = crud.create_project(
+        db,
+        payload.title,
+        payload.script_text,
+        payload.language,
+        payload.character_identity_prompt,
+        ",".join(tag.strip() for tag in payload.character_lora_tags if tag.strip()),
+    )
+
+    if payload.character_identity_prompt or payload.character_lora_tags:
+        adapters = [tag.strip() for tag in payload.character_lora_tags if tag.strip()]
+        if not adapters:
+            adapters = [""]
+        for idx, adapter in enumerate(adapters, start=1):
+            crud.create_project_character(
+                db,
+                project.id,
+                name="Lead" if idx == 1 else f"Lead Variant {idx}",
+                identity_prompt=payload.character_identity_prompt,
+                lora_adapter=adapter,
+                lora_strength=0.8,
+                notes="Seeded from project create payload",
+            )
+        project = crud.get_project(db, project.id) or project
     return project
 
 
@@ -425,11 +452,62 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
     return project
 
 
+@router.get("/projects/{project_id}/characters", response_model=list[CharacterOut])
+def list_project_characters(project_id: int, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return crud.list_project_characters(db, project_id)
+
+
+@router.post("/projects/{project_id}/characters", response_model=CharacterOut)
+def create_project_character(project_id: int, payload: CharacterCreate, db: Session = Depends(get_db)):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return crud.create_project_character(
+        db,
+        project_id,
+        name=payload.name,
+        identity_prompt=payload.identity_prompt,
+        lora_adapter=payload.lora_adapter,
+        lora_strength=payload.lora_strength,
+        notes=payload.notes,
+    )
+
+
+@router.put("/projects/{project_id}/scenes/{scene_id}/characters", response_model=list[SceneCharacterAssignmentOut])
+def update_scene_characters(
+    project_id: int,
+    scene_id: int,
+    payload: SceneCharactersUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    project = crud.get_project(db, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    scene = db.query(Scene).filter(Scene.id == scene_id, Scene.project_id == project_id).first()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+
+    valid_character_ids = {c.id for c in crud.list_project_characters(db, project_id)}
+    assignments: list[tuple[int, str, float]] = []
+    for item in payload.assignments:
+        if item.character_id not in valid_character_ids:
+            raise HTTPException(status_code=400, detail=f"character_id {item.character_id} does not belong to project")
+        assignments.append((item.character_id, item.role, item.weight))
+
+    return crud.set_scene_character_assignments(db, scene, assignments)
+
+
 def _run_pipeline(
     project_id: int,
     job_id: int,
     resume_from_scene_index: int | None = None,
     visual_mode: str = "basic",
+    music_path: str | None = None,
+    export_stems: bool = True,
 ):
     from app.database import SessionLocal
 
@@ -446,6 +524,8 @@ def _run_pipeline(
             resume=True,
             resume_from_scene_index=resume_from_scene_index,
             visual_mode=visual_mode,
+            music_path=music_path,
+            export_stems=export_stems,
         )
     except Exception as exc:
         job = crud.get_job(db, job_id)
@@ -482,12 +562,30 @@ def run_project(
             ),
         )
 
+    music_path: str | None = None
+    if payload.music_generation_id is not None:
+        music_record = (
+            db.query(MusicGeneration)
+            .filter(MusicGeneration.id == payload.music_generation_id)
+            .first()
+        )
+        if not music_record or music_record.status != "completed" or not music_record.audio_path:
+            raise HTTPException(status_code=400, detail="music_generation_id must reference a completed track")
+        music_path = music_record.audio_path
+
     job = crud.create_job(db, project_id)
-    queue_job_id = enqueue_pipeline(project_id, job.id, resume_from_scene_index=None, visual_mode=visual_mode)
+    queue_job_id = enqueue_pipeline(
+        project_id,
+        job.id,
+        resume_from_scene_index=None,
+        visual_mode=visual_mode,
+        music_path=music_path,
+        export_stems=payload.export_stems,
+    )
     if queue_job_id:
         crud.update_job_queue_id(db, job, queue_job_id)
     else:
-        background_tasks.add_task(_run_pipeline, project_id, job.id, None, visual_mode)
+        background_tasks.add_task(_run_pipeline, project_id, job.id, None, visual_mode, music_path, payload.export_stems)
     return {"job_id": job.id, "project_id": project_id, "status": "queued"}
 
 

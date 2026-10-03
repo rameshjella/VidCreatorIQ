@@ -47,9 +47,13 @@ def job_artifacts(job) -> dict:
     return {
         "video_url": to_public_url(job.output_video_path),
         "audio_url": to_public_url(job.output_audio_path),
+        "music_url": to_public_url(job.output_music_path),
+        "sfx_url": to_public_url(job.output_sfx_path),
         "subtitle_url": to_public_url(job.output_subtitle_path),
         "captions_vtt_url": to_public_url(vtt_path),
         "poster_url": to_public_url(job.output_poster_path),
+        "stems_manifest_url": to_public_url(job.output_stems_manifest_path),
+        "stems_zip_url": to_public_url(job.output_stems_zip_path),
         "duration_seconds": float(job.output_duration_seconds or 0.0),
     }
 

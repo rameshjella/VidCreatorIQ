@@ -11,6 +11,8 @@ def run_pipeline_job(
     job_id: int,
     resume_from_scene_index: int | None = None,
     visual_mode: str = "basic",
+    music_path: str | None = None,
+    export_stems: bool = True,
 ) -> None:
     db = SessionLocal()
     pipeline = MoviePipeline(db)
@@ -25,6 +27,8 @@ def run_pipeline_job(
             resume=True,
             resume_from_scene_index=resume_from_scene_index,
             visual_mode=visual_mode,
+            music_path=music_path,
+            export_stems=export_stems,
         )
     except Exception as exc:
         job = crud.get_job(db, job_id)

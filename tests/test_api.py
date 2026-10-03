@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
 
+from app.database import SessionLocal
+from app.models import Scene
 from app.main import app
 
 
@@ -59,6 +61,8 @@ def test_create_project_and_fetch() -> None:
     }
     created = client.post("/projects", json=payload)
     assert created.status_code == 200
+    assert created.json()["character_identity_prompt"] == ""
+    assert created.json()["character_lora_tags"] == ""
     project_id = created.json()["id"]
 
     fetched = client.get(f"/projects/{project_id}")
@@ -82,6 +86,87 @@ def test_update_scene_timeline_empty_payload() -> None:
 
 def test_resume_job_requires_payload() -> None:
     response = client.post("/jobs/999999/resume", json={"failed_scene_index": 1})
+    assert response.status_code == 404
+
+
+def test_run_project_rejects_unknown_music_generation() -> None:
+    created = client.post(
+        "/projects",
+        json={
+            "title": "Music Validation",
+            "script_text": "This is a valid test script with enough characters to pass validation.",
+            "language": "en",
+        },
+    )
+    assert created.status_code == 200
+    project_id = created.json()["id"]
+
+    response = client.post(
+        f"/projects/{project_id}/run",
+        json={"visual_mode": "basic", "music_generation_id": 99999999, "export_stems": True},
+    )
+    assert response.status_code == 400
+    assert "music_generation_id" in response.text
+
+
+def test_character_registry_and_scene_assignment() -> None:
+    created = client.post(
+        "/projects",
+        json={
+            "title": "Character Registry",
+            "script_text": "This is a valid test script with enough characters to pass validation.",
+            "language": "en",
+        },
+    )
+    assert created.status_code == 200
+    project_id = created.json()["id"]
+
+    # Seed one scene so per-scene character assignment can be tested without running the full render pipeline.
+    db = SessionLocal()
+    try:
+        db.add(
+            Scene(
+                project_id=project_id,
+                scene_index=1,
+                title="Scene 1",
+                script_chunk="Maya enters the station.",
+                description="",
+                image_prompt="cinematic still",
+                duration_seconds=4.0,
+            )
+        )
+        db.commit()
+        scene_id = int(db.query(Scene.id).filter(Scene.project_id == project_id).first()[0])
+    finally:
+        db.close()
+
+    character = client.post(
+        f"/projects/{project_id}/characters",
+        json={
+            "name": "Maya",
+            "identity_prompt": "short silver bob, red raincoat",
+            "lora_adapter": "maya_face_v2.safetensors",
+            "lora_strength": 0.85,
+            "notes": "Main protagonist",
+        },
+    )
+    assert character.status_code == 200
+    character_id = character.json()["id"]
+
+    listing = client.get(f"/projects/{project_id}/characters")
+    assert listing.status_code == 200
+    assert any(c["id"] == character_id for c in listing.json())
+
+    assigned = client.put(
+        f"/projects/{project_id}/scenes/{scene_id}/characters",
+        json={"assignments": [{"character_id": character_id, "role": "lead", "weight": 1.0}]},
+    )
+    assert assigned.status_code == 200
+    assert assigned.json()[0]["character_id"] == character_id
+
+
+def test_stems_package_endpoint_missing_job() -> None:
+    response = client.get("/jobs/99999999/stems-package")
     assert response.status_code == 404
 
 

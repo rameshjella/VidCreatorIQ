@@ -51,6 +51,39 @@ def run_startup_migrations(engine: Engine) -> None:
             )
         )
 
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS character_profiles (
+                    id INTEGER PRIMARY KEY,
+                    project_id INTEGER NOT NULL,
+                    name VARCHAR(128) DEFAULT 'Character',
+                    identity_prompt TEXT DEFAULT '',
+                    lora_adapter VARCHAR(255) DEFAULT '',
+                    lora_strength FLOAT DEFAULT 0.8,
+                    notes TEXT DEFAULT '',
+                    FOREIGN KEY(project_id) REFERENCES projects(id)
+                )
+                """
+            )
+        )
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS scene_characters (
+                    id INTEGER PRIMARY KEY,
+                    scene_id INTEGER NOT NULL,
+                    character_id INTEGER NOT NULL,
+                    role VARCHAR(64) DEFAULT 'support',
+                    weight FLOAT DEFAULT 1.0,
+                    FOREIGN KEY(scene_id) REFERENCES scenes(id),
+                    FOREIGN KEY(character_id) REFERENCES character_profiles(id)
+                )
+                """
+            )
+        )
+
         for ddl in [
             "ALTER TABLE jobs ADD COLUMN progress FLOAT DEFAULT 0.0",
             "ALTER TABLE jobs ADD COLUMN attempts INTEGER DEFAULT 0",
@@ -69,10 +102,40 @@ def run_startup_migrations(engine: Engine) -> None:
             "ALTER TABLE jobs ADD COLUMN output_subtitle_path VARCHAR(512) DEFAULT ''",
             "ALTER TABLE jobs ADD COLUMN output_poster_path VARCHAR(512) DEFAULT ''",
             "ALTER TABLE jobs ADD COLUMN output_duration_seconds FLOAT DEFAULT 0.0",
+            "ALTER TABLE projects ADD COLUMN character_identity_prompt TEXT DEFAULT ''",
+            "ALTER TABLE projects ADD COLUMN character_lora_tags TEXT DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN output_music_path VARCHAR(512) DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN output_sfx_path VARCHAR(512) DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN output_stems_manifest_path VARCHAR(512) DEFAULT ''",
+            "ALTER TABLE jobs ADD COLUMN output_stems_zip_path VARCHAR(512) DEFAULT ''",
         ]:
             try:
                 conn.execute(text(ddl))
             except Exception:
                 # Column already exists.
                 pass
+
+        # Backfill one default character profile from legacy project-level fields.
+        conn.execute(
+            text(
+                """
+                INSERT INTO character_profiles (project_id, name, identity_prompt, lora_adapter, lora_strength, notes)
+                SELECT p.id,
+                       'Lead',
+                       COALESCE(p.character_identity_prompt, ''),
+                       CASE
+                           WHEN instr(COALESCE(p.character_lora_tags, ''), ',') > 0
+                           THEN substr(COALESCE(p.character_lora_tags, ''), 1, instr(COALESCE(p.character_lora_tags, ''), ',') - 1)
+                           ELSE COALESCE(p.character_lora_tags, '')
+                       END,
+                       0.8,
+                       'Backfilled from legacy project identity fields'
+                FROM projects p
+                WHERE (COALESCE(p.character_identity_prompt, '') <> '' OR COALESCE(p.character_lora_tags, '') <> '')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM character_profiles c WHERE c.project_id = p.id
+                  )
+                """
+            )
+        )
 

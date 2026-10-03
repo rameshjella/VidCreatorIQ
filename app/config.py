@@ -20,11 +20,13 @@ class Settings(BaseSettings):
     comfyui_sd_prompt_node_id: str = ""
     comfyui_sd_seed_node_id: str = ""
     comfyui_sd_checkpoint_node_id: str = ""
+    comfyui_sd_lora_node_ids: str = ""
     comfyui_sd_output_node_id: str = ""
     comfyui_sd_checkpoint_name: str = "sd_xl_base_1.0.safetensors"
     comfyui_ad_prompt_node_id: str = ""
     comfyui_ad_seed_node_id: str = ""
     comfyui_ad_checkpoint_node_id: str = ""
+    comfyui_ad_lora_node_ids: str = ""
     comfyui_ad_output_node_id: str = ""
     comfyui_ad_checkpoint_name: str = "sd_xl_base_1.0.safetensors"
     # ---------------- Render / FFmpeg ----------------
@@ -44,6 +46,9 @@ class Settings(BaseSettings):
     render_ken_burns: bool = True
     render_burn_subtitles: bool = True
     render_music_bed_gain_db: float = -18.0
+    render_auto_sfx: bool = True
+    render_sfx_gain_db: float = -16.0
+    sfx_library_dir: str = "./workspace/sfx_library"
     render_min_scene_seconds: float = 2.0
 
     # ---------------- TTS ----------------

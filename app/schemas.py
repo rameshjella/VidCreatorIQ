@@ -7,6 +7,48 @@ class ProjectCreate(BaseModel):
     title: str = "Untitled Project"
     script_text: str = Field(min_length=20)
     language: str = "en"
+    character_identity_prompt: str = ""
+    character_lora_tags: list[str] = Field(default_factory=list)
+
+
+class CharacterCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    identity_prompt: str = ""
+    lora_adapter: str = ""
+    lora_strength: float = Field(default=0.8, ge=0.0, le=2.0)
+    notes: str = ""
+
+
+class CharacterOut(BaseModel):
+    id: int
+    project_id: int
+    name: str
+    identity_prompt: str
+    lora_adapter: str
+    lora_strength: float
+    notes: str
+
+    model_config = {"from_attributes": True}
+
+
+class SceneCharacterAssignmentIn(BaseModel):
+    character_id: int
+    role: str = "support"
+    weight: float = Field(default=1.0, ge=0.0, le=2.0)
+
+
+class SceneCharacterAssignmentOut(BaseModel):
+    id: int
+    scene_id: int
+    character_id: int
+    role: str
+    weight: float
+
+    model_config = {"from_attributes": True}
+
+
+class SceneCharactersUpdateRequest(BaseModel):
+    assignments: list[SceneCharacterAssignmentIn]
 
 
 class SceneOut(BaseModel):
@@ -21,6 +63,7 @@ class SceneOut(BaseModel):
     narration_path: str
     subtitle_path: str
     duration_seconds: float
+    character_assignments: list[SceneCharacterAssignmentOut] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -30,10 +73,13 @@ class ProjectOut(BaseModel):
     title: str
     script_text: str
     language: str
+    character_identity_prompt: str
+    character_lora_tags: str
     status: str
     created_at: datetime
     updated_at: datetime
-    scenes: list[SceneOut] = []
+    scenes: list[SceneOut] = Field(default_factory=list)
+    characters: list[CharacterOut] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -51,6 +97,10 @@ class JobOut(BaseModel):
     queue_job_id: str
     last_error: str
     output_video_path: str
+    output_music_path: str
+    output_sfx_path: str
+    output_stems_manifest_path: str
+    output_stems_zip_path: str
     created_at: datetime
     updated_at: datetime
 
@@ -83,6 +133,8 @@ class MovieRunResponse(BaseModel):
 
 class RunProjectRequest(BaseModel):
     visual_mode: str = "basic"
+    music_generation_id: int | None = None
+    export_stems: bool = True
 
 
 class JobEventOut(BaseModel):

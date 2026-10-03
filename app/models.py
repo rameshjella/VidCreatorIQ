@@ -13,11 +13,18 @@ class Project(Base):
     title: Mapped[str] = mapped_column(String(255), default="Untitled Project")
     script_text: Mapped[str] = mapped_column(Text)
     language: Mapped[str] = mapped_column(String(16), default="en")
+    # Global prompt fragment appended to every scene image prompt.
+    character_identity_prompt: Mapped[str] = mapped_column(Text, default="")
+    # Comma-separated LoRA adapter tags, e.g. "hero_face_v1:0.8,wardrobe_v2:0.6".
+    character_lora_tags: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(32), default="created")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     scenes: Mapped[list["Scene"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    characters: Mapped[list["CharacterProfile"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
     jobs: Mapped[list["Job"]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
 
@@ -43,6 +50,39 @@ class Scene(Base):
     tts_voice: Mapped[str] = mapped_column(String(128), default="")
 
     project: Mapped["Project"] = relationship(back_populates="scenes")
+    character_assignments: Mapped[list["SceneCharacter"]] = relationship(
+        back_populates="scene", cascade="all, delete-orphan"
+    )
+
+
+class CharacterProfile(Base):
+    __tablename__ = "character_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    name: Mapped[str] = mapped_column(String(128), default="Character")
+    identity_prompt: Mapped[str] = mapped_column(Text, default="")
+    lora_adapter: Mapped[str] = mapped_column(String(255), default="")
+    lora_strength: Mapped[float] = mapped_column(Float, default=0.8)
+    notes: Mapped[str] = mapped_column(Text, default="")
+
+    project: Mapped["Project"] = relationship(back_populates="characters")
+    scene_assignments: Mapped[list["SceneCharacter"]] = relationship(
+        back_populates="character", cascade="all, delete-orphan"
+    )
+
+
+class SceneCharacter(Base):
+    __tablename__ = "scene_characters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    scene_id: Mapped[int] = mapped_column(ForeignKey("scenes.id"), index=True)
+    character_id: Mapped[int] = mapped_column(ForeignKey("character_profiles.id"), index=True)
+    role: Mapped[str] = mapped_column(String(64), default="support")
+    weight: Mapped[float] = mapped_column(Float, default=1.0)
+
+    scene: Mapped["Scene"] = relationship(back_populates="character_assignments")
+    character: Mapped["CharacterProfile"] = relationship(back_populates="scene_assignments")
 
 
 class Job(Base):
@@ -61,7 +101,11 @@ class Job(Base):
     last_error: Mapped[str] = mapped_column(Text, default="")
     output_video_path: Mapped[str] = mapped_column(String(512), default="")
     output_audio_path: Mapped[str] = mapped_column(String(512), default="")
+    output_music_path: Mapped[str] = mapped_column(String(512), default="")
+    output_sfx_path: Mapped[str] = mapped_column(String(512), default="")
     output_subtitle_path: Mapped[str] = mapped_column(String(512), default="")
+    output_stems_manifest_path: Mapped[str] = mapped_column(String(512), default="")
+    output_stems_zip_path: Mapped[str] = mapped_column(String(512), default="")
     output_poster_path: Mapped[str] = mapped_column(String(512), default="")
     output_duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

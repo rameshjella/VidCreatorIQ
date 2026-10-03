@@ -581,6 +581,27 @@ a { color: var(--accent); text-decoration: none; }
 
 .scene-card__body { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); flex: 1; }
 .scene-card__title { font-size: var(--text-base); font-weight: var(--weight-semibold); }
+.scene-card--draggable { cursor: grab; }
+.scene-card--draggable:active { cursor: grabbing; }
+
+.scene-card__controls {
+  display: grid;
+  grid-template-columns: auto 1fr 92px;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.drag-handle {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  user-select: none;
+}
+
+.scene-card__controls .input {
+  height: 30px;
+  padding: var(--space-1) var(--space-2);
+}
 
 .scene-card__text {
   font-size: var(--text-sm);
@@ -934,6 +955,13 @@ a { color: var(--accent); text-decoration: none; }
   overflow: hidden;
   border: 1px solid var(--border-subtle);
   background: var(--surface-2);
+}
+
+.timeline-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
 }
 
 .timeline__block {

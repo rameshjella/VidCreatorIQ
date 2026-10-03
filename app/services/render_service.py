@@ -11,12 +11,15 @@ concatenation stage, and every produced file is validated with ffprobe.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from app.config import settings
 from app.services import ffmpeg_runner as ff
 from app.services.ffmpeg_runner import FFmpegError
 from app.services.comfyui_workflow_client import ComfyUIWorkflowClient
+from app.services.sfx_semantic_service import SFXSemanticMatcher
 
 
 def _escape_filter_path(path: Path) -> str:
@@ -152,7 +155,13 @@ class RenderService:
         normalized.replace(final_path)
         return final_path
 
-    def generate_clip_with_comfyui(self, prompt: str, scene_index: int, duration: float | None = None) -> Path:
+    def generate_clip_with_comfyui(
+        self,
+        prompt: str,
+        scene_index: int,
+        duration: float | None = None,
+        loras: list[dict] | None = None,
+    ) -> Path:
         raw_path = self.out_dir / f"scene_{scene_index:03d}_raw.mp4"
         client = ComfyUIWorkflowClient(settings.comfyui_url)
         history = client.run_workflow(
@@ -164,8 +173,10 @@ class RenderService:
                 "prompt": settings.comfyui_ad_prompt_node_id,
                 "seed": settings.comfyui_ad_seed_node_id,
                 "checkpoint": settings.comfyui_ad_checkpoint_node_id,
+                "lora": settings.comfyui_ad_lora_node_ids,
                 "output": settings.comfyui_ad_output_node_id,
             },
+            loras=loras or [],
         )
         client.download_first_video(history, raw_path)
         return self.normalize_clip(raw_path, scene_index, duration)
@@ -286,6 +297,78 @@ class RenderService:
         ff.validate_output(out_path, expect_video=False, expect_audio=True)
         return out_path
 
+    def auto_sfx_track(self, scene_texts: list[str], scene_durations: list[float], output_name: str = "sfx.wav") -> Path | None:
+        """Create an SFX bed using semantic retrieval from the local SFX library."""
+        sfx_dir = Path(settings.sfx_library_dir)
+        if not sfx_dir.exists():
+            return None
+
+        matcher = SFXSemanticMatcher(dims=256)
+        assets = matcher.index_library(sfx_dir)
+        if not assets:
+            return None
+
+        segments: list[Path] = []
+        seg_dir = self.out_dir / "sfx_segments"
+        seg_dir.mkdir(parents=True, exist_ok=True)
+
+        for i, (text, duration) in enumerate(zip(scene_texts, scene_durations), start=1):
+            best = matcher.search(text or "", top_k=1)
+            chosen: Path | None = best[0].path if best else None
+
+            seg = seg_dir / f"sfx_{i:03d}.wav"
+            seg_len = max(0.2, float(duration))
+            if chosen:
+                ff.run(
+                    [
+                        self.ffmpeg_cmd,
+                        "-y",
+                        "-stream_loop",
+                        "-1",
+                        "-i",
+                        str(chosen),
+                        "-t",
+                        f"{seg_len:.3f}",
+                        "-af",
+                        (
+                            f"aformat=sample_rates={self.sample_rate}:channel_layouts=stereo,"
+                            f"volume={settings.render_sfx_gain_db}dB"
+                        ),
+                        "-c:a",
+                        "pcm_s16le",
+                        "-ar",
+                        str(self.sample_rate),
+                        "-ac",
+                        "2",
+                        str(seg),
+                    ]
+                )
+            else:
+                ff.run(
+                    [
+                        self.ffmpeg_cmd,
+                        "-y",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        f"anullsrc=channel_layout=stereo:sample_rate={self.sample_rate}",
+                        "-t",
+                        f"{seg_len:.3f}",
+                        "-c:a",
+                        "pcm_s16le",
+                        "-ar",
+                        str(self.sample_rate),
+                        "-ac",
+                        "2",
+                        str(seg),
+                    ]
+                )
+            segments.append(seg)
+
+        if not segments:
+            return None
+        return self.concat_audio(segments, output_name=output_name)
+
     def to_mp3(self, source: Path, output_name: str = "narration.mp3") -> Path:
         """Export a broadcast-ready MP3 of the full narration mix."""
         out_path = self.out_dir / output_name
@@ -303,6 +386,116 @@ class RenderService:
         ff.validate_output(out_path, expect_video=False, expect_audio=True)
         return out_path
 
+    def export_stems(
+        self,
+        narration_path: Path,
+        music_path: Path | None = None,
+        sfx_path: Path | None = None,
+        output_dir_name: str = "stems",
+    ) -> dict[str, Path]:
+        """Export WAV stems + a small manifest for external NLE finishing."""
+        stems_dir = self.out_dir / output_dir_name
+        stems_dir.mkdir(parents=True, exist_ok=True)
+
+        narration_stem = stems_dir / "narration.wav"
+        ff.run(
+            [
+                self.ffmpeg_cmd,
+                "-y",
+                "-i",
+                str(narration_path),
+                "-c:a",
+                "pcm_s16le",
+                "-ar",
+                str(self.sample_rate),
+                "-ac",
+                "2",
+                str(narration_stem),
+            ]
+        )
+        ff.validate_output(narration_stem, expect_video=False, expect_audio=True)
+
+        tracks: dict[str, Path] = {"narration": narration_stem}
+        if music_path and Path(music_path).exists():
+            music_stem = stems_dir / "music.wav"
+            # Loop and trim so the DAW/NLE timeline stays aligned with narration.
+            ff.run(
+                [
+                    self.ffmpeg_cmd,
+                    "-y",
+                    "-stream_loop",
+                    "-1",
+                    "-i",
+                    str(music_path),
+                    "-af",
+                    (
+                        f"aformat=sample_rates={self.sample_rate}:channel_layouts=stereo,"
+                        f"volume={settings.render_music_bed_gain_db}dB"
+                    ),
+                    "-map",
+                    "0:a",
+                    "-t",
+                    f"{ff.probe_duration(Path(narration_path)):.3f}",
+                    "-c:a",
+                    "pcm_s16le",
+                    "-ar",
+                    str(self.sample_rate),
+                    "-ac",
+                    "2",
+                    str(music_stem),
+                ]
+            )
+            ff.validate_output(music_stem, expect_video=False, expect_audio=True)
+            tracks["music"] = music_stem
+
+        if sfx_path and Path(sfx_path).exists():
+            sfx_stem = stems_dir / "sfx.wav"
+            ff.run(
+                [
+                    self.ffmpeg_cmd,
+                    "-y",
+                    "-i",
+                    str(sfx_path),
+                    "-c:a",
+                    "pcm_s16le",
+                    "-ar",
+                    str(self.sample_rate),
+                    "-ac",
+                    "2",
+                    str(sfx_stem),
+                ]
+            )
+            ff.validate_output(sfx_stem, expect_video=False, expect_audio=True)
+            tracks["sfx"] = sfx_stem
+
+        manifest = stems_dir / "stems_manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "sample_rate": self.sample_rate,
+                    "channels": 2,
+                    "tracks": {name: path.name for name, path in tracks.items()},
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        tracks["manifest"] = manifest
+        return tracks
+
+    def export_stems_zip(self, tracks: dict[str, Path], output_name: str = "stems_package.zip") -> Path:
+        """Package stem assets into a single ZIP for external NLE workflows."""
+        stems_dir = self.out_dir / "stems"
+        stems_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = stems_dir / output_name
+        with ZipFile(zip_path, mode="w", compression=ZIP_DEFLATED) as bundle:
+            for _, path in tracks.items():
+                candidate = Path(path)
+                if not candidate.exists():
+                    continue
+                bundle.write(candidate, arcname=f"stems/{candidate.name}")
+        return zip_path
+
     # ------------------------------------------------------------------
     # Final mux
     # ------------------------------------------------------------------
@@ -313,15 +506,20 @@ class RenderService:
         subtitle_path: Path | None = None,
         output_name: str = "final_movie.mp4",
         music_path: Path | None = None,
+        sfx_path: Path | None = None,
     ) -> Path:
         """Produce the deliverable MP4: burned subtitles, mixed + normalised audio."""
         out_path = self.out_dir / output_name
 
         cmd = [self.ffmpeg_cmd, "-y", "-i", str(video_path), "-i", str(audio_path)]
         music_index = None
+        sfx_index = None
         if music_path and Path(music_path).exists():
             cmd += ["-i", str(music_path)]
             music_index = 2
+        if sfx_path and Path(sfx_path).exists():
+            cmd += ["-i", str(sfx_path)]
+            sfx_index = 3 if music_index is not None else 2
 
         filters: list[str] = []
 
@@ -340,19 +538,29 @@ class RenderService:
         video_map = "[vout]"
 
         loudnorm = f"loudnorm=I={settings.render_loudness_lufs}:TP=-1.5:LRA=11"
+        filters.append(f"[1:a]aformat=sample_rates={self.sample_rate}:channel_layouts=stereo[narr]")
+        mix_inputs = ["[narr]"]
         if music_index is not None:
             gain = settings.render_music_bed_gain_db
-            filters.append(f"[1:a]aformat=sample_rates={self.sample_rate}:channel_layouts=stereo[narr]")
             filters.append(
                 f"[{music_index}:a]aformat=sample_rates={self.sample_rate}:channel_layouts=stereo,"
                 f"volume={gain}dB,aloop=loop=-1:size=2000000000[bed]"
             )
-            # Duck the music under the narration so dialogue always stays intelligible.
+            # Duck the music under narration so speech stays intelligible.
             filters.append("[bed][narr]sidechaincompress=threshold=0.05:ratio=8:attack=5:release=300[ducked]")
-            filters.append(f"[narr][ducked]amix=inputs=2:duration=first:dropout_transition=0,{loudnorm}[aout]")
+            mix_inputs.append("[ducked]")
+        if sfx_index is not None:
+            filters.append(
+                f"[{sfx_index}:a]aformat=sample_rates={self.sample_rate}:channel_layouts=stereo,"
+                f"volume={settings.render_sfx_gain_db}dB[sfx]"
+            )
+            mix_inputs.append("[sfx]")
+
+        if len(mix_inputs) == 1:
+            filters.append(f"{mix_inputs[0]}{loudnorm}[aout]")
         else:
             filters.append(
-                f"[1:a]aformat=sample_rates={self.sample_rate}:channel_layouts=stereo,{loudnorm}[aout]"
+                f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0,{loudnorm}[aout]"
             )
 
         cmd += [
@@ -370,7 +578,7 @@ class RenderService:
             if settings.render_burn_subtitles and subtitle_path:
                 # Subtitle burn-in is the most fragile step (font/path issues);
                 # retry without it rather than failing the whole render.
-                return self.mux_without_subtitles(video_path, audio_path, output_name, music_path)
+                return self.mux_without_subtitles(video_path, audio_path, output_name, music_path, sfx_path)
             raise
 
         ff.validate_output(out_path, expect_video=True, expect_audio=True)
@@ -382,16 +590,46 @@ class RenderService:
         audio_path: Path,
         output_name: str = "final_movie.mp4",
         music_path: Path | None = None,
+        sfx_path: Path | None = None,
     ) -> Path:
         out_path = self.out_dir / output_name
         loudnorm = f"loudnorm=I={settings.render_loudness_lufs}:TP=-1.5:LRA=11"
-        cmd = [
-            self.ffmpeg_cmd, "-y",
-            "-i", str(video_path),
-            "-i", str(audio_path),
+        cmd = [self.ffmpeg_cmd, "-y", "-i", str(video_path), "-i", str(audio_path)]
+        filters = [f"[1:a]aformat=sample_rates={self.sample_rate}:channel_layouts=stereo[narr]"]
+        mix_inputs = ["[narr]"]
+
+        if music_path and Path(music_path).exists():
+            cmd += ["-i", str(music_path)]
+            filters.append(
+                f"[2:a]aformat=sample_rates={self.sample_rate}:channel_layouts=stereo,"
+                f"volume={settings.render_music_bed_gain_db}dB,aloop=loop=-1:size=2000000000[bed]"
+            )
+            filters.append("[bed][narr]sidechaincompress=threshold=0.05:ratio=8:attack=5:release=300[ducked]")
+            mix_inputs.append("[ducked]")
+
+        if sfx_path and Path(sfx_path).exists():
+            cmd += ["-i", str(sfx_path)]
+            sfx_input = 3 if music_path and Path(music_path).exists() else 2
+            filters.append(
+                f"[{sfx_input}:a]aformat=sample_rates={self.sample_rate}:channel_layouts=stereo,"
+                f"volume={settings.render_sfx_gain_db}dB[sfx]"
+            )
+            mix_inputs.append("[sfx]")
+
+        if len(mix_inputs) == 1:
+            filters.append(f"{mix_inputs[0]}{loudnorm}[aout]")
+        else:
+            filters.append(
+                f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=0,{loudnorm}[aout]"
+            )
+
+        cmd += [
             "-filter_complex",
-            f"[1:a]aformat=sample_rates={self.sample_rate}:channel_layouts=stereo,{loudnorm}[aout]",
-            "-map", "0:v", "-map", "[aout]",
+            ";".join(filters),
+            "-map",
+            "0:v",
+            "-map",
+            "[aout]",
             *self._video_encode_args(),
             *self._audio_encode_args(),
             str(out_path),

@@ -219,3 +219,29 @@ def test_extract_history_error_returns_none_for_non_error_status() -> None:
     assert detail is None
 
 
+def test_inject_runtime_values_builds_lora_chain_and_rewires_consumers() -> None:
+    workflow = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ""}},
+        "2": {"class_type": "KSampler", "inputs": {"seed": 1, "model": ["1", 0]}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["1", 1]}},
+    }
+    client = ComfyUIWorkflowClient("http://127.0.0.1:8188")
+
+    client._inject_runtime_values(
+        workflow,
+        prompt="hello",
+        seed=123,
+        checkpoint="sd_xl_base_1.0.safetensors",
+        scene_index=1,
+        node_map={"checkpoint": "1", "seed": "2", "prompt": "3"},
+        loras=[{"adapter": "hero_face_v1.safetensors", "strength": 0.9}],
+    )
+
+    lora_nodes = [n for n, data in workflow.items() if data.get("class_type") == "LoraLoader"]
+    assert lora_nodes, "Expected a LoraLoader node to be injected"
+    lora_id = lora_nodes[0]
+    assert workflow[lora_id]["inputs"]["lora_name"] == "hero_face_v1.safetensors"
+    assert workflow["2"]["inputs"]["model"] == [lora_id, 0]
+    assert workflow["3"]["inputs"]["clip"] == [lora_id, 1]
+
+

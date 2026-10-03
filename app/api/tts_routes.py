@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -108,6 +109,29 @@ def get_project_artifacts(project_id: int, db: Session = Depends(get_db)) -> dic
     if not job:
         raise HTTPException(status_code=404, detail="No renders found for this project")
     return _artifacts_payload(job, db)
+
+
+@router.get("/jobs/{job_id}/stems-package")
+def download_stems_package(job_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    zip_path = Path(job.output_stems_zip_path or "") if job.output_stems_zip_path else None
+    if zip_path and zip_path.exists():
+        return FileResponse(str(zip_path), media_type="application/zip", filename=f"project_{job.project_id}_stems.zip")
+
+    manifest = Path(job.output_stems_manifest_path or "") if job.output_stems_manifest_path else None
+    if not manifest or not manifest.exists():
+        raise HTTPException(status_code=404, detail="No stems package available for this job")
+
+    stems_dir = manifest.parent
+    zip_path = stems_dir / "stems_package.zip"
+    with ZipFile(zip_path, mode="w", compression=ZIP_DEFLATED) as bundle:
+        for file in stems_dir.iterdir():
+            if file.is_file() and file.suffix.lower() in {".wav", ".json"}:
+                bundle.write(file, arcname=f"stems/{file.name}")
+    return FileResponse(str(zip_path), media_type="application/zip", filename=f"project_{job.project_id}_stems.zip")
 
 
 def _artifacts_payload(job: Job, db: Session) -> dict:

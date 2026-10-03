@@ -12,6 +12,9 @@ class PipelineState(TypedDict):
     language: str
     scenes: list[dict]
     style: str
+    character_identity_prompt: str
+    character_lora_tags: str
+    character_registry: list[dict]
 
 
 def _naive_scene_split(script_text: str) -> list[str]:
@@ -85,8 +88,20 @@ class DirectorAgent:
 class StoryboardAgent:
     def __call__(self, state: PipelineState) -> PipelineState:
         # This node exists so prompt refinement can evolve independently from director decisions.
+        identity_prompt = (state.get("character_identity_prompt") or "").strip()
+        lora_tags = (state.get("character_lora_tags") or "").strip()
+        registry = state.get("character_registry") or []
         for scene in state["scenes"]:
-            scene["image_prompt"] = f"{scene['image_prompt']}, style: {state.get('style', 'cinematic')}"
+            prompt_parts = [scene["image_prompt"], f"style: {state.get('style', 'cinematic')}"]
+            if identity_prompt:
+                prompt_parts.append(f"identity: {identity_prompt}")
+            if lora_tags:
+                prompt_parts.append(f"lora: {lora_tags}")
+            if registry:
+                names = ", ".join(str(c.get("name", "")).strip() for c in registry if str(c.get("name", "")).strip())
+                if names:
+                    prompt_parts.append(f"cast: {names}")
+            scene["image_prompt"] = ", ".join(p for p in prompt_parts if p)
         return state
 
 

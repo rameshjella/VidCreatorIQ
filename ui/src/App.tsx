@@ -77,6 +77,8 @@ function Shell() {
   const [script, setScript] = useState(SAMPLE_SCRIPT);
   const [language, setLanguage] = useState("en");
   const [visualMode, setVisualMode] = useState<"basic" | "cinematic">("basic");
+  const [characterIdentityPrompt, setCharacterIdentityPrompt] = useState("");
+  const [characterLoraTags, setCharacterLoraTags] = useState("");
 
   const [project, setProject] = useState<ProjectOut | null>(null);
   const [job, setJob] = useState<JobOut | null>(null);
@@ -119,6 +121,8 @@ function Shell() {
         setProject(full);
         setTitle(full.title);
         setScript(full.script_text);
+        setCharacterIdentityPrompt(full.character_identity_prompt || "");
+        setCharacterLoraTags(full.character_lora_tags || "");
         try {
           setArtifacts(await api.projectArtifacts(BASE_URL, projectId));
         } catch {
@@ -251,6 +255,11 @@ function Shell() {
         title: title.trim() || "Untitled Project",
         script_text: script,
         language,
+        character_identity_prompt: characterIdentityPrompt,
+        character_lora_tags: characterLoraTags
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
       });
       setProject(created);
 
@@ -264,7 +273,44 @@ function Shell() {
       setError(message);
       toast("error", "Could not start the render.");
     }
-  }, [script, title, language, visualMode, startPolling, toast]);
+  }, [
+    script,
+    title,
+    language,
+    characterIdentityPrompt,
+    characterLoraTags,
+    visualMode,
+    startPolling,
+    toast,
+  ]);
+
+  const handleSaveTimeline = useCallback(
+    async (updatedScenes: Array<{ scene_id: number; scene_index: number; duration_seconds: number }>) => {
+      if (!project) return;
+      const updated = await api.updateTimeline(BASE_URL, project.id, updatedScenes);
+      setProject((prev) => (prev ? { ...prev, scenes: updated } : prev));
+      setArtifacts((prev) =>
+        prev
+          ? {
+              ...prev,
+              scenes: prev.scenes
+                .map((scene) => {
+                  const next = updated.find((u) => u.id === scene.id);
+                  if (!next) return scene;
+                  return {
+                    ...scene,
+                    scene_index: next.scene_index,
+                    duration_seconds: next.duration_seconds,
+                  };
+                })
+                .sort((a, b) => a.scene_index - b.scene_index),
+            }
+          : prev,
+      );
+      toast("success", "Timeline saved.");
+    },
+    [project, toast],
+  );
 
   const handlePreviewVoice = useCallback(async () => {
     setPreviewBusy(true);
@@ -292,6 +338,8 @@ function Shell() {
     setBusy(false);
     setTitle("Untitled Project");
     setScript("");
+    setCharacterIdentityPrompt("");
+    setCharacterLoraTags("");
     setView("studio");
   }, [stopPolling]);
 
@@ -435,6 +483,10 @@ function Shell() {
                 setLanguage={setLanguage}
                 visualMode={visualMode}
                 setVisualMode={setVisualMode}
+                characterIdentityPrompt={characterIdentityPrompt}
+                setCharacterIdentityPrompt={setCharacterIdentityPrompt}
+                characterLoraTags={characterLoraTags}
+                setCharacterLoraTags={setCharacterLoraTags}
                 wordCount={wordCount}
                 estimatedRuntime={estimatedRuntime}
                 busy={busy}
@@ -453,6 +505,7 @@ function Shell() {
                 projects={projects}
                 activeProjectId={project?.id ?? null}
                 onOpenProject={openProject}
+                onSaveTimeline={handleSaveTimeline}
                 onGoToStudio={() => setView("studio")}
               />
             )}
@@ -625,6 +678,10 @@ function StudioView(props: {
   setLanguage: (v: string) => void;
   visualMode: "basic" | "cinematic";
   setVisualMode: (v: "basic" | "cinematic") => void;
+  characterIdentityPrompt: string;
+  setCharacterIdentityPrompt: (v: string) => void;
+  characterLoraTags: string;
+  setCharacterLoraTags: (v: string) => void;
   wordCount: number;
   estimatedRuntime: number;
   busy: boolean;
@@ -690,6 +747,34 @@ function StudioView(props: {
                 placeholder="Open on a quiet street at dawn..."
               />
             </Field>
+
+              <Field
+                label="Character identity prompt"
+                htmlFor="character-identity"
+                hint="Shared visual identity applied to every scene prompt."
+              >
+                <textarea
+                  id="character-identity"
+                  className="textarea"
+                  value={props.characterIdentityPrompt}
+                  onChange={(e) => props.setCharacterIdentityPrompt(e.target.value)}
+                  placeholder="Lead: Maya Chen, 32, short silver bob, amber eyes, red raincoat, consistent facial structure."
+                />
+              </Field>
+
+              <Field
+                label="LoRA tags"
+                htmlFor="character-lora-tags"
+                hint="Comma-separated (optional), e.g. hero_face_v1:0.8, outfit_redcoat_v2:0.6"
+              >
+                <input
+                  id="character-lora-tags"
+                  className="input"
+                  value={props.characterLoraTags}
+                  onChange={(e) => props.setCharacterLoraTags(e.target.value)}
+                  placeholder="hero_face_v1:0.8"
+                />
+              </Field>
           </div>
         </Card>
 
@@ -775,6 +860,7 @@ function StoryboardView({
   projects,
   activeProjectId,
   onOpenProject,
+  onSaveTimeline,
   onGoToStudio,
 }: {
   scenes: ProjectOut["scenes"];
@@ -782,31 +868,79 @@ function StoryboardView({
   projects: ProjectOut[];
   activeProjectId: number | null;
   onOpenProject: (projectId: number) => void;
+  onSaveTimeline: (updatedScenes: Array<{ scene_id: number; scene_index: number; duration_seconds: number }>) => Promise<void>;
   onGoToStudio: () => void;
 }) {
   // While a render is in flight the project record may not have scenes yet, but
   // the artifacts endpoint already does - prefer whichever is richer.
-  const rows = artifacts?.scenes?.length
-    ? artifacts.scenes.map((a) => ({
-        id: a.id,
-        scene_index: a.scene_index,
-        title: a.title,
-        text: a.script_chunk ?? "",
-        duration: a.duration_seconds,
-        image: a.image_url,
-        audio: a.narration_url,
-        provider: a.tts_provider,
-      }))
-    : scenes.map((s) => ({
-        id: s.id,
-        scene_index: s.scene_index,
-        title: s.title,
-        text: s.script_chunk,
-        duration: s.duration_seconds,
-        image: "",
-        audio: "",
-        provider: "",
-      }));
+  const baseRows = useMemo(
+    () =>
+      (artifacts?.scenes?.length
+        ? artifacts.scenes.map((a) => ({
+            id: a.id,
+            scene_index: a.scene_index,
+            title: a.title,
+            text: a.script_chunk ?? "",
+            duration: a.duration_seconds,
+            image: a.image_url,
+            audio: a.narration_url,
+            provider: a.tts_provider,
+          }))
+        : scenes.map((s) => ({
+            id: s.id,
+            scene_index: s.scene_index,
+            title: s.title,
+            text: s.script_chunk,
+            duration: s.duration_seconds,
+            image: "",
+            audio: "",
+            provider: "",
+          })))
+        .slice()
+        .sort((a, b) => a.scene_index - b.scene_index),
+    [artifacts, scenes],
+  );
+  const [rows, setRows] = useState(baseRows);
+  const [savingTimeline, setSavingTimeline] = useState(false);
+  const [draggingSceneId, setDraggingSceneId] = useState<number | null>(null);
+
+  useEffect(() => {
+    setRows(baseRows);
+  }, [baseRows]);
+
+  const reindex = useCallback(
+    (nextRows: typeof baseRows) => nextRows.map((row, i) => ({ ...row, scene_index: i + 1 })),
+    [],
+  );
+
+  const moveScene = useCallback(
+    (draggedId: number, targetId: number) => {
+      if (draggedId === targetId) return;
+      const current = rows.slice();
+      const from = current.findIndex((r) => r.id === draggedId);
+      const to = current.findIndex((r) => r.id === targetId);
+      if (from < 0 || to < 0) return;
+      const [item] = current.splice(from, 1);
+      current.splice(to, 0, item);
+      setRows(reindex(current));
+    },
+    [rows, reindex],
+  );
+
+  const saveTimeline = useCallback(async () => {
+    setSavingTimeline(true);
+    try {
+      await onSaveTimeline(
+        rows.map((row) => ({
+          scene_id: row.id,
+          scene_index: row.scene_index,
+          duration_seconds: Math.max(0.5, Number(row.duration || 0)),
+        })),
+      );
+    } finally {
+      setSavingTimeline(false);
+    }
+  }, [onSaveTimeline, rows]);
 
   const totalDuration = rows.reduce((sum, r) => sum + (r.duration || 0), 0);
 
@@ -884,7 +1018,13 @@ function StoryboardView({
       </div>
 
       {totalDuration > 0 && (
-        <Card title="Timeline" description="Block width is proportional to scene length.">
+        <Card title="Timeline" description="Drag scene cards to reorder, then save.">
+          <div className="timeline-toolbar">
+            <span className="dim">{rows.length} scenes</span>
+            <button type="button" className="btn btn--sm" onClick={saveTimeline} disabled={savingTimeline}>
+              {savingTimeline ? "Saving..." : "Save timeline"}
+            </button>
+          </div>
           <div className="timeline">
             {rows.map((row) => (
               <div
@@ -902,7 +1042,18 @@ function StoryboardView({
 
       <div className="grid grid--3">
         {rows.map((row) => (
-          <article className="scene-card" key={row.id}>
+          <article
+            className="scene-card scene-card--draggable"
+            key={row.id}
+            draggable
+            onDragStart={() => setDraggingSceneId(row.id)}
+            onDragEnd={() => setDraggingSceneId(null)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => {
+              if (draggingSceneId !== null) moveScene(draggingSceneId, row.id);
+              setDraggingSceneId(null);
+            }}
+          >
             <div className="scene-card__media">
               {row.image ? (
                 <img src={row.image} alt={`Scene ${row.scene_index}: ${row.title}`} loading="lazy" />
@@ -913,6 +1064,28 @@ function StoryboardView({
               <span className="scene-card__duration">{formatDuration(row.duration)}</span>
             </div>
             <div className="scene-card__body">
+              <div className="scene-card__controls">
+                <span className="drag-handle" title="Drag to reorder" aria-hidden>
+                  :::
+                </span>
+                <label className="dim" htmlFor={`duration-${row.id}`}>
+                  Duration (s)
+                </label>
+                <input
+                  id={`duration-${row.id}`}
+                  className="input"
+                  type="number"
+                  min={0.5}
+                  step={0.1}
+                  value={Number(row.duration).toFixed(1)}
+                  onChange={(e) => {
+                    const value = Number(e.target.value);
+                    setRows((prev) =>
+                      prev.map((it) => (it.id === row.id ? { ...it, duration: Number.isFinite(value) ? value : it.duration } : it)),
+                    );
+                  }}
+                />
+              </div>
               <h3 className="scene-card__title">{row.title}</h3>
               {row.text && <p className="scene-card__text">{row.text}</p>}
               {row.provider && <span className="dim">Voiced by {row.provider}</span>}
@@ -1160,6 +1333,10 @@ function PreviewView({
   const assets = [
     { label: "Final movie (MP4)", url: artifacts.video_url },
     { label: "Narration (MP3)", url: artifacts.audio_url },
+    { label: "Music stem (WAV)", url: artifacts.music_url },
+    { label: "SFX stem (MP3)", url: artifacts.sfx_url },
+    { label: "Stems manifest (JSON)", url: artifacts.stems_manifest_url },
+    { label: "Stems package (ZIP)", url: artifacts.stems_zip_url },
     { label: "Subtitles (SRT)", url: artifacts.subtitle_url },
     { label: "Captions (VTT)", url: artifacts.captions_vtt_url },
     { label: "Poster frame (JPG)", url: artifacts.poster_url },

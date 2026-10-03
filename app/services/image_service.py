@@ -24,10 +24,16 @@ class ImageService:
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-    def generate(self, prompt: str, scene_index: int, visual_mode: str = "basic") -> Path:
+    def generate(
+        self,
+        prompt: str,
+        scene_index: int,
+        visual_mode: str = "basic",
+        loras: list[dict] | None = None,
+    ) -> Path:
         if visual_mode == "cinematic" and settings.comfyui_url:
             try:
-                return self._generate_with_comfyui(prompt, scene_index)
+                return self._generate_with_comfyui(prompt, scene_index, loras or [])
             except Exception as exc:  # noqa: BLE001
                 # Previously this was swallowed silently, so "cinematic" renders
                 # quietly became grey text cards. Log loudly, then degrade.
@@ -39,7 +45,7 @@ class ImageService:
                 )
         return self._generate_placeholder(prompt, scene_index)
 
-    def _generate_with_comfyui(self, prompt: str, scene_index: int) -> Path:
+    def _generate_with_comfyui(self, prompt: str, scene_index: int, loras: list[dict]) -> Path:
         path = self.out_dir / f"scene_{scene_index:03d}.png"
         client = ComfyUIWorkflowClient(settings.comfyui_url)
         history = client.run_workflow(
@@ -51,8 +57,10 @@ class ImageService:
                 "prompt": settings.comfyui_sd_prompt_node_id,
                 "seed": settings.comfyui_sd_seed_node_id,
                 "checkpoint": settings.comfyui_sd_checkpoint_node_id,
+                "lora": settings.comfyui_sd_lora_node_ids,
                 "output": settings.comfyui_sd_output_node_id,
             },
+            loras=loras,
         )
         client.download_first_image(history, path)
         return path

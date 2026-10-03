@@ -28,6 +28,7 @@ class ComfyUIWorkflowClient:
         scene_index: int,
         checkpoint: str,
         node_map: dict[str, str] | None = None,
+        loras: list[dict] | None = None,
     ) -> dict:
         raw = workflow_path.read_text(encoding="utf-8")
         workflow = self._load_workflow(raw)
@@ -35,7 +36,7 @@ class ComfyUIWorkflowClient:
         self._assert_checkpoint_available(checkpoint)
         seed = random.randint(1, 2_000_000_000)
         node_map = node_map or {}
-        self._inject_runtime_values(workflow, prompt, seed, checkpoint, scene_index, node_map)
+        self._inject_runtime_values(workflow, prompt, seed, checkpoint, scene_index, node_map, loras or [])
 
         queued = requests.post(
             f"{self.base_url}/prompt",
@@ -124,6 +125,7 @@ class ComfyUIWorkflowClient:
         checkpoint: str,
         scene_index: int,
         node_map: dict[str, str],
+        loras: list[dict],
     ) -> None:
         prompt_node = node_map.get("prompt") or self._find_node_id(workflow, "CLIPTextEncode")
         seed_node = node_map.get("seed") or self._find_node_with_input(workflow, "seed")
@@ -145,8 +147,91 @@ class ComfyUIWorkflowClient:
             workflow[seed_node]["inputs"]["seed"] = seed
         if checkpoint_node:
             workflow[checkpoint_node]["inputs"]["ckpt_name"] = checkpoint
+            self._inject_lora_chain(workflow, checkpoint_node, node_map, loras)
         if output_node and "filename_prefix" in workflow[output_node].get("inputs", {}):
             workflow[output_node]["inputs"]["filename_prefix"] = f"ai_movie/scene_{scene_index:03d}"
+
+    def _inject_lora_chain(
+        self,
+        workflow: dict,
+        checkpoint_node: str,
+        node_map: dict[str, str],
+        loras: list[dict],
+    ) -> None:
+        adapters = [l for l in loras if (l.get("adapter") or "").strip()]
+        if not adapters:
+            return
+
+        configured = [n.strip() for n in (node_map.get("lora") or "").split(",") if n.strip()]
+        for node_id in configured:
+            if node_id not in workflow:
+                raise ValueError(f"Configured lora node '{node_id}' was not found in workflow")
+
+        existing_loaders = configured or [
+            node_id for node_id, node in workflow.items() if node.get("class_type") == "LoraLoader"
+        ]
+
+        model_src: list[object] = [checkpoint_node, 0]
+        clip_src: list[object] = [checkpoint_node, 1]
+        lora_node_ids: list[str] = []
+        for index, adapter in enumerate(adapters):
+            if index < len(existing_loaders):
+                node_id = existing_loaders[index]
+            else:
+                node_id = self._next_node_id(workflow)
+                workflow[node_id] = {"class_type": "LoraLoader", "inputs": {}}
+
+            workflow[node_id].setdefault("inputs", {})
+            workflow[node_id]["class_type"] = "LoraLoader"
+            workflow[node_id]["inputs"].update(
+                {
+                    "model": list(model_src),
+                    "clip": list(clip_src),
+                    "lora_name": str(adapter.get("adapter", "")).strip(),
+                    "strength_model": float(adapter.get("strength", 0.8)),
+                    "strength_clip": float(adapter.get("strength", 0.8)),
+                }
+            )
+            lora_node_ids.append(node_id)
+            model_src = [node_id, 0]
+            clip_src = [node_id, 1]
+
+        last_lora_node = lora_node_ids[-1]
+        self._rewire_checkpoint_consumers(
+            workflow,
+            checkpoint_node=checkpoint_node,
+            replacement_node=last_lora_node,
+            skip_nodes=set(lora_node_ids),
+        )
+
+    @staticmethod
+    def _rewire_checkpoint_consumers(
+        workflow: dict,
+        checkpoint_node: str,
+        replacement_node: str,
+        skip_nodes: set[str],
+    ) -> None:
+        for node_id, node_data in workflow.items():
+            if node_id in skip_nodes:
+                continue
+            inputs = node_data.get("inputs", {})
+            if not isinstance(inputs, dict):
+                continue
+            for key, value in list(inputs.items()):
+                if not (isinstance(value, list) and len(value) >= 2):
+                    continue
+                source_node, source_slot = str(value[0]), value[1]
+                if source_node != checkpoint_node:
+                    continue
+                if source_slot == 0:
+                    inputs[key] = [replacement_node, 0]
+                elif source_slot == 1:
+                    inputs[key] = [replacement_node, 1]
+
+    @staticmethod
+    def _next_node_id(workflow: dict) -> str:
+        numeric = [int(k) for k in workflow.keys() if str(k).isdigit()]
+        return str((max(numeric) + 1) if numeric else 1)
 
     @staticmethod
     def _validate_workflow_shape(workflow: dict) -> None:

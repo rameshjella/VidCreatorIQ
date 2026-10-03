@@ -30,7 +30,16 @@ export const api = {
   dependencies: (baseUrl: string) => requestJson<DependenciesResponse>(`${baseUrl}/health/dependencies`),
   dependencyDoctor: (baseUrl: string) =>
     requestJson<DependencyDoctorResponse>(`${baseUrl}/health/dependency-doctor`),
-  createProject: (baseUrl: string, payload: { title: string; script_text: string; language: string }) =>
+  createProject: (
+    baseUrl: string,
+    payload: {
+      title: string;
+      script_text: string;
+      language: string;
+      character_identity_prompt?: string;
+      character_lora_tags?: string[];
+    },
+  ) =>
     requestJson<ProjectOut>(`${baseUrl}/projects`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -38,11 +47,20 @@ export const api = {
     }),
   listProjects: (baseUrl: string) => requestJson<ProjectOut[]>(`${baseUrl}/projects`),
   getProject: (baseUrl: string, projectId: number) => requestJson<ProjectOut>(`${baseUrl}/projects/${projectId}`),
-  runProject: (baseUrl: string, projectId: number, visualMode: "basic" | "cinematic") =>
+  runProject: (
+    baseUrl: string,
+    projectId: number,
+    visualMode: "basic" | "cinematic",
+    options?: { music_generation_id?: number | null; export_stems?: boolean },
+  ) =>
     requestJson<MovieRunResponse>(`${baseUrl}/projects/${projectId}/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ visual_mode: visualMode }),
+      body: JSON.stringify({
+        visual_mode: visualMode,
+        music_generation_id: options?.music_generation_id ?? null,
+        export_stems: options?.export_stems ?? true,
+      }),
     }),
   getJob: (baseUrl: string, jobId: number) => requestJson<JobOut>(`${baseUrl}/jobs/${jobId}`),
   getJobEvents: (baseUrl: string, jobId: number) => requestJson<JobEventOut[]>(`${baseUrl}/jobs/${jobId}/events`),
@@ -68,6 +86,45 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scene_id: sceneId }),
     }),
+  listCharacters: (baseUrl: string, projectId: number) =>
+    requestJson<
+      Array<{
+        id: number;
+        project_id: number;
+        name: string;
+        identity_prompt: string;
+        lora_adapter: string;
+        lora_strength: number;
+        notes: string;
+      }>
+    >(`${baseUrl}/projects/${projectId}/characters`),
+  createCharacter: (
+    baseUrl: string,
+    projectId: number,
+    payload: {
+      name: string;
+      identity_prompt?: string;
+      lora_adapter?: string;
+      lora_strength?: number;
+      notes?: string;
+    },
+  ) =>
+    requestJson(`${baseUrl}/projects/${projectId}/characters`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  updateSceneCharacters: (
+    baseUrl: string,
+    projectId: number,
+    sceneId: number,
+    assignments: Array<{ character_id: number; role?: string; weight?: number }>,
+  ) =>
+    requestJson(`${baseUrl}/projects/${projectId}/scenes/${sceneId}/characters`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignments }),
+    }),
 
   // --- Voice Studio -------------------------------------------------------
   ttsProviders: (baseUrl: string) => requestJson<TTSProvidersResponse>(`${baseUrl}/tts/providers`),
@@ -92,6 +149,7 @@ export const api = {
     requestJson<JobArtifacts>(`${baseUrl}/jobs/${jobId}/artifacts`),
   projectArtifacts: (baseUrl: string, projectId: number) =>
     requestJson<JobArtifacts>(`${baseUrl}/projects/${projectId}/artifacts`),
+  stemsPackageUrl: (baseUrl: string, jobId: number) => `${baseUrl}/jobs/${jobId}/stems-package`,
 
   musicHealth: (baseUrl: string) => requestJson<MusicEngineHealth>(`${baseUrl}/music/health`),
   musicWarmup: (baseUrl: string) => requestJson(`${baseUrl}/music/warmup`, { method: "POST" }),
