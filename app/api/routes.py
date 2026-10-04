@@ -1,6 +1,8 @@
+import json
+import logging
+import time
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse
-import json
 import requests
 from pathlib import Path
 from shutil import which
@@ -31,6 +33,7 @@ from app.services.pipeline import MoviePipeline
 from app.services.comfyui_workflow_client import ComfyUIWorkflowClient
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
@@ -169,6 +172,19 @@ def _is_comfyui_ready() -> bool:
         return False
 
 
+def _is_comfyui_ready_with_retry(attempts: int = 3, delay_seconds: float = 0.5) -> bool:
+    """Retry readiness checks to avoid failing on short ComfyUI startup blips."""
+    safe_attempts = max(1, int(attempts))
+    for index in range(safe_attempts):
+        if _is_comfyui_ready():
+            if index > 0:
+                logger.info("ComfyUI readiness recovered after %d retry attempt(s)", index)
+            return True
+        if index < safe_attempts - 1:
+            time.sleep(max(0.0, delay_seconds))
+    return False
+
+
 def _has_comfyui_checkpoints() -> bool:
     return bool(_comfyui_checkpoint_health().get("has_checkpoints", False))
 
@@ -201,7 +217,7 @@ def _resolve_cinematic_quality_profile(requested: str, script_text: str) -> str:
     if requested == "fast":
         return "fast"
 
-    comfy_ready = _is_comfyui_ready()
+    comfy_ready = _is_comfyui_ready_with_retry()
     has_checkpoints = _has_comfyui_checkpoints()
     has_temporal_graph = _has_temporal_video_workflow_nodes()
 

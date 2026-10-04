@@ -12,6 +12,10 @@ class TTSUnavailable(RuntimeError):
     """
 
 
+class TTSPermanentFailure(TTSUnavailable):
+    """Raised for non-retryable provider failures (for example billing/quotas)."""
+
+
 @dataclass
 class VoiceOption:
     id: str

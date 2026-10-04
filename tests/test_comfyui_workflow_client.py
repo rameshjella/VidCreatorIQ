@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 import requests
@@ -243,5 +244,16 @@ def test_inject_runtime_values_builds_lora_chain_and_rewires_consumers() -> None
     assert workflow[lora_id]["inputs"]["lora_name"] == "hero_face_v1.safetensors"
     assert workflow["2"]["inputs"]["model"] == [lora_id, 0]
     assert workflow["3"]["inputs"]["clip"] == [lora_id, 1]
+
+
+def test_sdxl_template_cliptext_nodes_reference_clip_output_slot() -> None:
+    workflow_path = Path("app/workflows/comfyui_sdxl_image.json")
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+
+    clip_source = workflow["6"]["inputs"]["clip"]
+    negative_clip_source = workflow["7"]["inputs"]["clip"]
+
+    assert clip_source[1] == 1
+    assert negative_clip_source[1] == 1
 
 

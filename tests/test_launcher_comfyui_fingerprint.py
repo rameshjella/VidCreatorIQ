@@ -32,3 +32,15 @@ def test_fingerprint_changes_when_model_paths_change(tmp_path: Path) -> None:
 
     assert fp_a != fp_b
 
+
+def test_wait_http_ok_timed_reports_elapsed_seconds(monkeypatch) -> None:
+    perf_values = iter([100.0, 101.25])
+    monkeypatch.setattr(launcher.time, "perf_counter", lambda: next(perf_values))
+    monkeypatch.setattr(launcher, "_wait_http_ok", lambda *_args, **_kwargs: True)
+
+    ready, elapsed = launcher._wait_http_ok_timed("http://127.0.0.1:8000/health", 5)
+
+    assert ready is True
+    assert elapsed == 1.25
+
+

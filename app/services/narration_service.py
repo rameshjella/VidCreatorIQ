@@ -14,13 +14,13 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.config import settings
 from app.services import ffmpeg_runner as ff
 from app.services.tts import postprocess
-from app.services.tts.base import TTSUnavailable
+from app.services.tts.base import TTSPermanentFailure, TTSUnavailable
 from app.services.tts.registry import resolve_provider_chain
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ class Narration:
     duration: float
     provider: str
     voice: str
+    notices: list[str] = field(default_factory=list)
 
 
 class TTSService:
@@ -42,6 +43,7 @@ class TTSService:
         self.voice = voice
         self.cache_dir = Path(settings.workspace_dir) / ".tts_cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._disabled_providers: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -70,9 +72,24 @@ class TTSService:
             return Narration(output_path, ff.probe_duration(output_path), "cache", self.voice)
 
         errors: list[str] = []
+        notices: list[str] = []
         for provider in resolve_provider_chain(self.provider_name):
+            if provider.name in self._disabled_providers:
+                continue
             try:
                 self._synthesize_with(provider, clean, output_path)
+            except TTSPermanentFailure as exc:
+                self._disabled_providers.add(provider.name)
+                errors.append(f"{provider.name}: {exc}")
+                if provider.name == "openai":
+                    notices.append("OpenAI credits exhausted, switched to fallback provider")
+                logger.warning(
+                    "TTS provider %s permanently failed for scene %s: %s (provider disabled for this run)",
+                    provider.name,
+                    scene_index,
+                    exc,
+                )
+                continue
             except Exception as exc:  # noqa: BLE001 - capture the reason, then try the next one
                 errors.append(f"{provider.name}: {exc}")
                 logger.warning("TTS provider %s failed for scene %s: %s", provider.name, scene_index, exc)
@@ -80,7 +97,7 @@ class TTSService:
 
             duration = ff.probe_duration(output_path)
             cached.write_bytes(output_path.read_bytes())
-            return Narration(output_path, duration, provider.name, self.voice or "")
+            return Narration(output_path, duration, provider.name, self.voice or "", notices=notices)
 
         raise TTSUnavailable(
             "All TTS providers failed for scene "
@@ -136,6 +153,8 @@ class TTSService:
                         break
                     except Exception as exc:  # noqa: BLE001
                         last_error = exc
+                        if isinstance(exc, TTSPermanentFailure):
+                            raise
                         if attempt < attempts - 1:
                             # Exponential backoff smooths over provider rate limits.
                             time.sleep(1.5 * (2**attempt))

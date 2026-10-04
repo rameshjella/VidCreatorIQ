@@ -61,6 +61,13 @@ def _wait_http_ok(url: str, timeout_seconds: int) -> bool:
     return False
 
 
+def _wait_http_ok_timed(url: str, timeout_seconds: int) -> tuple[bool, float]:
+    start = time.perf_counter()
+    ready = _wait_http_ok(url, timeout_seconds)
+    elapsed = time.perf_counter() - start
+    return ready, elapsed
+
+
 def _build_comfyui_command(env: dict[str, str], workspace: Path) -> tuple[list[str], Path]:
     return _build_comfyui_command_with_mode(env, workspace, auto_discover=False)
 
@@ -727,15 +734,22 @@ def main() -> int:
 
                     if comfyui_url:
                         _log_line("launcher", f"waiting for ComfyUI at {comfyui_url}", combined_log)
-                        comfy_ready = _wait_http_ok(f"{comfyui_url.rstrip('/')}/system_stats", comfyui_timeout)
+                        comfy_ready, comfy_wait_seconds = _wait_http_ok_timed(
+                            f"{comfyui_url.rstrip('/')}/system_stats",
+                            comfyui_timeout,
+                        )
                         if not comfy_ready:
                             _log_line(
                                 "launcher",
-                                f"startup failed: ComfyUI did not become reachable in {comfyui_timeout}s",
+                                f"startup failed: ComfyUI did not become reachable in {comfy_wait_seconds:.1f}s",
                                 combined_log,
                             )
                             return 1
-                        _log_line("launcher", f"ComfyUI ready: {comfyui_url}", combined_log)
+                        _log_line(
+                            "launcher",
+                            f"ComfyUI ready in {comfy_wait_seconds:.1f}s: {comfyui_url}",
+                            combined_log,
+                        )
                     else:
                         _log_line(
                             "launcher",
@@ -765,16 +779,24 @@ def main() -> int:
             api_url = f"http://{args.host}:{api_port}/health"
             ui_url = ui_health_url
             _log_line("launcher", f"waiting for API at {api_url}", combined_log)
-            api_ready = _wait_http_ok(api_url, args.startup_timeout)
+            api_ready, api_wait_seconds = _wait_http_ok_timed(api_url, args.startup_timeout)
             _log_line("launcher", f"waiting for UI at {ui_url}", combined_log)
-            ui_ready = _wait_http_ok(ui_url, args.startup_timeout)
+            ui_ready, ui_wait_seconds = _wait_http_ok_timed(ui_url, args.startup_timeout)
 
             if not api_ready or not ui_ready:
-                _log_line("launcher", "startup failed: API or UI not reachable in time", combined_log)
+                _log_line(
+                    "launcher",
+                    (
+                        "startup failed: "
+                        f"API ready={api_ready} ({api_wait_seconds:.1f}s), "
+                        f"UI ready={ui_ready} ({ui_wait_seconds:.1f}s)"
+                    ),
+                    combined_log,
+                )
                 return 1
 
-            _log_line("launcher", f"API ready: {api_url}", combined_log)
-            _log_line("launcher", f"UI ready: {ui_url}", combined_log)
+            _log_line("launcher", f"API ready in {api_wait_seconds:.1f}s: {api_url}", combined_log)
+            _log_line("launcher", f"UI ready in {ui_wait_seconds:.1f}s: {ui_url}", combined_log)
 
             if args.music_warmup:
                 if not _music_warmup(env["API_BASE_URL"], combined_log):

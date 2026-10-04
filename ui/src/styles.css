@@ -719,6 +719,7 @@ a { color: var(--accent); text-decoration: none; }
 .console__time { color: var(--text-disabled); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .console__stage { color: var(--accent-2); flex-shrink: 0; min-width: 120px; }
 .console__msg { color: var(--text-secondary); }
+.console__line[data-level="warning"] .console__msg { color: var(--warning); }
 .console__line[data-level="error"] .console__msg { color: var(--danger); }
 
 /* --- Alerts --------------------------------------------------------------- */

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import httpx
 
 from app.config import settings
-from app.services.tts.base import TTSResult, TTSUnavailable, VoiceOption
+from app.services.tts.base import TTSPermanentFailure, TTSResult, TTSUnavailable, VoiceOption
 
 VOICES = [
     ("alloy", "Alloy", "neutral"),
@@ -52,6 +53,10 @@ class OpenAITTSProvider:
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            if self._is_quota_exhausted(exc.response):
+                raise TTSPermanentFailure(
+                    "OpenAI TTS credits are exhausted. Add billing credits or switch TTS_PROVIDER."
+                ) from exc
             raise TTSUnavailable(f"OpenAI TTS returned {exc.response.status_code}: {exc.response.text[:300]}") from exc
         except httpx.HTTPError as exc:
             raise TTSUnavailable(f"OpenAI TTS request failed: {exc}") from exc
@@ -66,4 +71,23 @@ class OpenAITTSProvider:
             VoiceOption(id=vid, name=label, locale="en-US", gender=gender, provider=self.name)
             for vid, label, gender in VOICES
         ]
+
+    @staticmethod
+    def _is_quota_exhausted(response: httpx.Response | None) -> bool:
+        if response is None or response.status_code != 429:
+            return False
+
+        body = (response.text or "").lower()
+        if "insufficient_quota" in body or "credit_balance_exhausted" in body:
+            return True
+
+        try:
+            payload = json.loads(response.text or "{}")
+        except Exception:
+            return False
+
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        code = str(error.get("code", "")).lower()
+        err_type = str(error.get("type", "")).lower()
+        return code == "credit_balance_exhausted" or err_type == "insufficient_quota"
 

@@ -3,8 +3,8 @@
     "inputs": {
       "text": "{{prompt}}",
       "clip": [
-        "11",
-        0
+        "10",
+        1
       ]
     },
     "class_type": "CLIPTextEncode"
@@ -13,8 +13,8 @@
     "inputs": {
       "text": "low quality, blurry, artifacts",
       "clip": [
-        "11",
-        0
+        "10",
+        1
       ]
     },
     "class_type": "CLIPTextEncode"

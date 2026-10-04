@@ -203,12 +203,39 @@ def test_true_motion_requires_comfyui_readiness(monkeypatch) -> None:
     project_id = created.json()["id"]
 
     monkeypatch.setattr(api_routes, "_is_comfyui_ready", lambda: False)
+    monkeypatch.setattr(api_routes.time, "sleep", lambda _: None)
     response = client.post(
         f"/projects/{project_id}/run",
         json={"visual_mode": "cinematic", "cinematic_quality_profile": "true_motion"},
     )
     assert response.status_code == 400
     assert "True Motion requires ComfyUI readiness" in response.text
+
+
+def test_true_motion_recovers_from_transient_comfyui_readiness_failure(monkeypatch) -> None:
+    created = client.post(
+        "/projects",
+        json={
+            "title": "True Motion Retry",
+            "script_text": "This is a valid test script with enough characters to pass validation.",
+            "language": "en",
+        },
+    )
+    assert created.status_code == 200
+    project_id = created.json()["id"]
+
+    readiness_results = iter([False, True])
+    monkeypatch.setattr(api_routes, "_is_comfyui_ready", lambda: next(readiness_results))
+    monkeypatch.setattr(api_routes, "_has_comfyui_checkpoints", lambda: True)
+    monkeypatch.setattr(api_routes, "_has_temporal_video_workflow_nodes", lambda: True)
+    monkeypatch.setattr(api_routes.time, "sleep", lambda _: None)
+
+    response = client.post(
+        f"/projects/{project_id}/run",
+        json={"visual_mode": "cinematic", "cinematic_quality_profile": "true_motion"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
 
 
 def test_run_project_accepts_output_controls() -> None:

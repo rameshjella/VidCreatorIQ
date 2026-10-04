@@ -191,6 +191,15 @@ class MoviePipeline:
                 )
                 result = tts_service.synthesize_detailed(scene.script_chunk, scene.scene_index)
                 narration = result.path
+                for notice in result.notices:
+                    crud.create_job_event(
+                        self.db,
+                        job.id,
+                        stage="narrator",
+                        level="warning",
+                        message=notice,
+                        progress=job.progress,
+                    )
                 scene.narration_path = str(narration)
                 scene.tts_provider = result.provider
                 scene.tts_voice = result.voice or ""
