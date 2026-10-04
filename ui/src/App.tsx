@@ -32,6 +32,8 @@ const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || "http://127.0.
 
 type View = "studio" | "storyboard" | "voice" | "render" | "preview" | "music" | "system";
 type CinematicQualityProfile = "fast" | "balanced" | "true_motion";
+type OutputResolution = "720p" | "1080p" | "1440p" | "4k" | "vertical_1080p";
+type OutputFps = 24 | 30 | 60;
 
 const NAV: Array<{ id: View; label: string; icon: string; group: string }> = [
   { id: "studio", label: "Script Studio", icon: "\u270E", group: "Create" },
@@ -62,6 +64,35 @@ Then the beam swung around, steady and patient and certain, and cut a road of li
 
 The boat turned toward it. And the lighthouse, as always, kept burning.`;
 
+const LANGUAGE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "en", label: "English" },
+  { value: "as", label: "Assamese" },
+  { value: "bn", label: "Bengali" },
+  { value: "brx", label: "Bodo" },
+  { value: "doi", label: "Dogri" },
+  { value: "gu", label: "Gujarati" },
+  { value: "hi", label: "Hindi" },
+  { value: "kn", label: "Kannada" },
+  { value: "ks", label: "Kashmiri" },
+  { value: "kok", label: "Konkani" },
+  { value: "mai", label: "Maithili" },
+  { value: "ml", label: "Malayalam" },
+  { value: "mni", label: "Manipuri" },
+  { value: "mr", label: "Marathi" },
+  { value: "ne", label: "Nepali" },
+  { value: "or", label: "Odia" },
+  { value: "pa", label: "Punjabi" },
+  { value: "sa", label: "Sanskrit" },
+  { value: "sat", label: "Santali" },
+  { value: "sd", label: "Sindhi" },
+  { value: "ta", label: "Tamil" },
+  { value: "te", label: "Telugu" },
+  { value: "ur", label: "Urdu" },
+  { value: "es", label: "Spanish" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+];
+
 /* ========================================================================== */
 /* Shell                                                                      */
 /* ========================================================================== */
@@ -79,6 +110,9 @@ function Shell() {
   const [language, setLanguage] = useState("en");
   const [visualMode, setVisualMode] = useState<"basic" | "cinematic">("basic");
   const [cinematicQualityProfile, setCinematicQualityProfile] = useState<CinematicQualityProfile>("balanced");
+  const [outputResolution, setOutputResolution] = useState<OutputResolution>("1080p");
+  const [outputFps, setOutputFps] = useState<OutputFps>(30);
+  const [burnSubtitles, setBurnSubtitles] = useState(true);
   const [characterIdentityPrompt, setCharacterIdentityPrompt] = useState("");
   const [characterLoraTags, setCharacterLoraTags] = useState("");
 
@@ -267,6 +301,9 @@ function Shell() {
 
       const run = await api.runProject(BASE_URL, created.id, visualMode, {
         cinematic_quality_profile: cinematicQualityProfile,
+        output_resolution: outputResolution,
+        output_fps: outputFps,
+        burn_subtitles: burnSubtitles,
       });
       setJob(await api.getJob(BASE_URL, run.job_id));
       startPolling(run.job_id, created.id);
@@ -285,6 +322,9 @@ function Shell() {
     characterLoraTags,
     visualMode,
     cinematicQualityProfile,
+    outputResolution,
+    outputFps,
+    burnSubtitles,
     startPolling,
     toast,
   ]);
@@ -344,6 +384,9 @@ function Shell() {
     setTitle("Untitled Project");
     setScript("");
     setCinematicQualityProfile("balanced");
+    setOutputResolution("1080p");
+    setOutputFps(30);
+    setBurnSubtitles(true);
     setCharacterIdentityPrompt("");
     setCharacterLoraTags("");
     setView("studio");
@@ -491,6 +534,12 @@ function Shell() {
                 setVisualMode={setVisualMode}
                 cinematicQualityProfile={cinematicQualityProfile}
                 setCinematicQualityProfile={setCinematicQualityProfile}
+                outputResolution={outputResolution}
+                setOutputResolution={setOutputResolution}
+                outputFps={outputFps}
+                setOutputFps={setOutputFps}
+                burnSubtitles={burnSubtitles}
+                setBurnSubtitles={setBurnSubtitles}
                 characterIdentityPrompt={characterIdentityPrompt}
                 setCharacterIdentityPrompt={setCharacterIdentityPrompt}
                 characterLoraTags={characterLoraTags}
@@ -688,6 +737,12 @@ function StudioView(props: {
   setVisualMode: (v: "basic" | "cinematic") => void;
   cinematicQualityProfile: CinematicQualityProfile;
   setCinematicQualityProfile: (v: CinematicQualityProfile) => void;
+  outputResolution: OutputResolution;
+  setOutputResolution: (v: OutputResolution) => void;
+  outputFps: OutputFps;
+  setOutputFps: (v: OutputFps) => void;
+  burnSubtitles: boolean;
+  setBurnSubtitles: (v: boolean) => void;
   characterIdentityPrompt: string;
   setCharacterIdentityPrompt: (v: string) => void;
   characterLoraTags: string;
@@ -732,7 +787,7 @@ function StudioView(props: {
       <div className="grid grid--4">
         <Stat label="Words" value={props.wordCount} />
         <Stat label="Est. runtime" value={formatDuration(props.estimatedRuntime)} hint="at 150 wpm" />
-        <Stat label="Output" value="1080p" hint="H.264 / AAC 192k" />
+        <Stat label="Output" value={`${props.outputResolution} @ ${props.outputFps}fps`} hint="H.264 / AAC 192k" />
         <Stat label="Mode" value={props.visualMode === "basic" ? "Fast" : "Cinematic"} />
       </div>
 
@@ -837,12 +892,52 @@ function StudioView(props: {
                   value={props.language}
                   onChange={(e) => props.setLanguage(e.target.value)}
                 >
-                  <option value="en">English</option>
-                  <option value="es">Spanish</option>
-                  <option value="fr">French</option>
-                  <option value="de">German</option>
-                  <option value="hi">Hindi</option>
+                  {LANGUAGE_OPTIONS.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
                 </select>
+              </Field>
+
+              <Field label="Video resolution" htmlFor="resolution">
+                <select
+                  id="resolution"
+                  className="select"
+                  value={props.outputResolution}
+                  onChange={(e) => props.setOutputResolution(e.target.value as OutputResolution)}
+                >
+                  <option value="720p">1280x720 (HD)</option>
+                  <option value="1080p">1920x1080 (Full HD)</option>
+                  <option value="1440p">2560x1440 (QHD)</option>
+                  <option value="4k">3840x2160 (4K UHD)</option>
+                  <option value="vertical_1080p">1080x1920 (Vertical)</option>
+                </select>
+              </Field>
+
+              <Field label="Frame rate" htmlFor="fps">
+                <select
+                  id="fps"
+                  className="select"
+                  value={props.outputFps}
+                  onChange={(e) => props.setOutputFps(Number(e.target.value) as OutputFps)}
+                >
+                  <option value={24}>24 fps (film look)</option>
+                  <option value={30}>30 fps (balanced)</option>
+                  <option value={60}>60 fps (smoother)</option>
+                </select>
+              </Field>
+
+              <Field label="Subtitles">
+                <Segmented
+                  label="Subtitles"
+                  value={props.burnSubtitles ? "on" : "off"}
+                  onChange={(v) => props.setBurnSubtitles(v === "on")}
+                  options={[
+                    { value: "on", label: "Burn In" },
+                    { value: "off", label: "No Burn" },
+                  ]}
+                />
               </Field>
 
               <button

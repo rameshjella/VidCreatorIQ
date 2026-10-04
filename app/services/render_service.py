@@ -37,13 +37,21 @@ def _escape_filter_path(path: Path) -> str:
 
 
 class RenderService:
-    def __init__(self, out_dir: Path):
+    def __init__(
+        self,
+        out_dir: Path,
+        width: int | None = None,
+        height: int | None = None,
+        fps: int | None = None,
+        burn_subtitles: bool | None = None,
+    ):
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        self.width = int(settings.render_width)
-        self.height = int(settings.render_height)
-        self.fps = int(settings.render_fps)
+        self.width = int(width or settings.render_width)
+        self.height = int(height or settings.render_height)
+        self.fps = int(fps or settings.render_fps)
         self.sample_rate = int(settings.render_audio_sample_rate)
+        self.burn_subtitles = settings.render_burn_subtitles if burn_subtitles is None else bool(burn_subtitles)
         self.ffmpeg_cmd = ff.ffmpeg_bin()
         self._comfy_video_temporal_ready: bool | None = None
 
@@ -555,7 +563,7 @@ class RenderService:
 
         filters: list[str] = []
 
-        if settings.render_burn_subtitles and subtitle_path and Path(subtitle_path).exists():
+        if self.burn_subtitles and subtitle_path and Path(subtitle_path).exists():
             style = (
                 "FontName=Arial,Fontsize=22,PrimaryColour=&H00FFFFFF,"
                 "OutlineColour=&H90000000,BorderStyle=3,Outline=1,Shadow=0,"
@@ -607,7 +615,7 @@ class RenderService:
         try:
             ff.run(cmd)
         except FFmpegError:
-            if settings.render_burn_subtitles and subtitle_path:
+            if self.burn_subtitles and subtitle_path:
                 # Subtitle burn-in is the most fragile step (font/path issues);
                 # retry without it rather than failing the whole render.
                 return self.mux_without_subtitles(video_path, audio_path, output_name, music_path, sfx_path)

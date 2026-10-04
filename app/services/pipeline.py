@@ -32,6 +32,17 @@ def _project_dir(project_id: int) -> Path:
     return d
 
 
+def _resolution_to_dimensions(resolution: str) -> tuple[int, int]:
+    mapping = {
+        "720p": (1280, 720),
+        "1080p": (1920, 1080),
+        "1440p": (2560, 1440),
+        "4k": (3840, 2160),
+        "vertical_1080p": (1080, 1920),
+    }
+    return mapping.get((resolution or "1080p").strip().lower(), (1920, 1080))
+
+
 class MoviePipeline:
     def __init__(self, db: Session):
         self.db = db
@@ -44,6 +55,9 @@ class MoviePipeline:
         resume_from_scene_index: int | None = None,
         visual_mode: str = "basic",
         cinematic_quality_profile: str = "balanced",
+        output_resolution: str = "1080p",
+        output_fps: int = 30,
+        burn_subtitles: bool | None = None,
         tts_provider: str | None = None,
         tts_voice: str = "",
         music_path: str | None = None,
@@ -107,10 +121,17 @@ class MoviePipeline:
         self.db.commit()
 
         root = _project_dir(project.id)
+        width, height = _resolution_to_dimensions(output_resolution)
         image_service = ImageService(root / "images")
         tts_service = TTSService(root / "audio", provider=tts_provider, voice=tts_voice)
         subtitle_service = SubtitleService(root / "subs")
-        render_service = RenderService(root / "video")
+        render_service = RenderService(
+            root / "video",
+            width=width,
+            height=height,
+            fps=int(output_fps or settings.render_fps),
+            burn_subtitles=burn_subtitles,
+        )
 
         profile = (cinematic_quality_profile or "balanced").strip().lower()
         if profile not in {"fast", "balanced", "true_motion"}:

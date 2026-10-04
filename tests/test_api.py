@@ -211,3 +211,31 @@ def test_true_motion_requires_comfyui_readiness(monkeypatch) -> None:
     assert "True Motion requires ComfyUI readiness" in response.text
 
 
+def test_run_project_accepts_output_controls() -> None:
+    created = client.post(
+        "/projects",
+        json={
+            "title": "Output Controls",
+            "script_text": "This is a valid test script with enough characters to pass validation.",
+            "language": "ta",
+        },
+    )
+    assert created.status_code == 200
+    project_id = created.json()["id"]
+
+    response = client.post(
+        f"/projects/{project_id}/run",
+        json={
+            "visual_mode": "basic",
+            "cinematic_quality_profile": "balanced",
+            "output_resolution": "720p",
+            "output_fps": 24,
+            "burn_subtitles": False,
+            "export_stems": True,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "queued"
+
+

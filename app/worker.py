@@ -12,6 +12,9 @@ def run_pipeline_job(
     resume_from_scene_index: int | None = None,
     visual_mode: str = "basic",
     cinematic_quality_profile: str = "balanced",
+    output_resolution: str = "1080p",
+    output_fps: int = 30,
+    burn_subtitles: bool | None = None,
     music_path: str | None = None,
     export_stems: bool = True,
 ) -> None:
@@ -29,6 +32,9 @@ def run_pipeline_job(
             resume_from_scene_index=resume_from_scene_index,
             visual_mode=visual_mode,
             cinematic_quality_profile=cinematic_quality_profile,
+            output_resolution=output_resolution,
+            output_fps=output_fps,
+            burn_subtitles=burn_subtitles,
             music_path=music_path,
             export_stems=export_stems,
         )

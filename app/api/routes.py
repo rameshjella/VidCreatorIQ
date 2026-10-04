@@ -574,6 +574,9 @@ def _run_pipeline(
     resume_from_scene_index: int | None = None,
     visual_mode: str = "basic",
     cinematic_quality_profile: str = "balanced",
+    output_resolution: str = "1080p",
+    output_fps: int = 30,
+    burn_subtitles: bool | None = None,
     music_path: str | None = None,
     export_stems: bool = True,
 ):
@@ -593,6 +596,9 @@ def _run_pipeline(
             resume_from_scene_index=resume_from_scene_index,
             visual_mode=visual_mode,
             cinematic_quality_profile=cinematic_quality_profile,
+            output_resolution=output_resolution,
+            output_fps=output_fps,
+            burn_subtitles=burn_subtitles,
             music_path=music_path,
             export_stems=export_stems,
         )
@@ -643,6 +649,9 @@ def run_project(
         resume_from_scene_index=None,
         visual_mode=visual_mode,
         cinematic_quality_profile=effective_profile,
+        output_resolution=payload.output_resolution,
+        output_fps=payload.output_fps,
+        burn_subtitles=payload.burn_subtitles,
         music_path=music_path,
         export_stems=payload.export_stems,
     )
@@ -656,6 +665,9 @@ def run_project(
             None,
             visual_mode,
             effective_profile,
+            payload.output_resolution,
+            payload.output_fps,
+            payload.burn_subtitles,
             music_path,
             payload.export_stems,
         )
@@ -698,6 +710,9 @@ def resume_job(
         resume_from_scene_index=payload.failed_scene_index,
         visual_mode="basic",
         cinematic_quality_profile="fast",
+        output_resolution="1080p",
+        output_fps=30,
+        burn_subtitles=None,
     )
     if queue_job_id:
         crud.update_job_queue_id(db, job, queue_job_id)

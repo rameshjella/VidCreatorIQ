@@ -53,6 +53,9 @@ export const api = {
     visualMode: "basic" | "cinematic",
     options?: {
       cinematic_quality_profile?: "fast" | "balanced" | "true_motion";
+      output_resolution?: "720p" | "1080p" | "1440p" | "4k" | "vertical_1080p";
+      output_fps?: 24 | 30 | 60;
+      burn_subtitles?: boolean;
       music_generation_id?: number | null;
       export_stems?: boolean;
     },
@@ -63,6 +66,9 @@ export const api = {
       body: JSON.stringify({
         visual_mode: visualMode,
         cinematic_quality_profile: options?.cinematic_quality_profile ?? "balanced",
+        output_resolution: options?.output_resolution ?? "1080p",
+        output_fps: options?.output_fps ?? 30,
+        burn_subtitles: options?.burn_subtitles ?? true,
         music_generation_id: options?.music_generation_id ?? null,
         export_stems: options?.export_stems ?? true,
       }),

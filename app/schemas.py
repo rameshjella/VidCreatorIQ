@@ -135,6 +135,9 @@ class MovieRunResponse(BaseModel):
 class RunProjectRequest(BaseModel):
     visual_mode: str = "basic"
     cinematic_quality_profile: Literal["fast", "balanced", "true_motion"] = "balanced"
+    output_resolution: Literal["720p", "1080p", "1440p", "4k", "vertical_1080p"] = "1080p"
+    output_fps: Literal[24, 30, 60] = 30
+    burn_subtitles: bool | None = None
     music_generation_id: int | None = None
     export_stems: bool = True
 
